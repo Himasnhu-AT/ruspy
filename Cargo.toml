@@ -1,0 +1,12 @@
+[package]
+name = "ruspy"
+version = "0.1.0"
+description = "Rust like efficiency with python like syntax"
+edition = "2021"
+authors = ["Himanshu <github: Himasnhu-at, email: hyattherate2005@gmail.com"]
+readme = "https://github.com/Himasnhu-at/ruspy.git/#readme"
+homepage = "https://github.com/Himasnhu-at/ruspy.git/#readme"
+repository = "https://github.com/Himasnhu-at/ruspy.git"
+license = "BSD-Clause-3"
+
+[dependencies]
