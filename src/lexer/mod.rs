@@ -11,6 +11,8 @@ pub enum Token {
     LParen,
     RParen,
     EOF,
+    Assign,
+    Semicolon,
 }
 
 pub struct Lexer<'a> {
@@ -72,6 +74,14 @@ impl<'a> Lexer<'a> {
                     self.advance();
                     return Token::RParen;
                 }
+                '=' => {
+                    self.advance();
+                    return Token::Assign;
+                }
+                ';' => {
+                    self.advance();
+                    return Token::Semicolon;
+                }
                 _ => panic!("Unexpected character: {}", c),
             }
         }
@@ -102,5 +112,36 @@ impl<'a> Lexer<'a> {
             }
         }
         Token::Number(result.parse::<i64>().unwrap())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lexer_numbers() {
+        let mut lexer = Lexer::new("123 456");
+        assert_eq!(lexer.get_next_token(), Token::Number(123));
+        assert_eq!(lexer.get_next_token(), Token::Number(456));
+        assert_eq!(lexer.get_next_token(), Token::EOF);
+    }
+
+    #[test]
+    fn test_lexer_operators() {
+        let mut lexer = Lexer::new("+ - * /");
+        assert_eq!(lexer.get_next_token(), Token::Plus);
+        assert_eq!(lexer.get_next_token(), Token::Minus);
+        assert_eq!(lexer.get_next_token(), Token::Asterisk);
+        assert_eq!(lexer.get_next_token(), Token::Slash);
+        assert_eq!(lexer.get_next_token(), Token::EOF);
+    }
+
+    #[test]
+    fn test_lexer_parentheses() {
+        let mut lexer = Lexer::new("( )");
+        assert_eq!(lexer.get_next_token(), Token::LParen);
+        assert_eq!(lexer.get_next_token(), Token::RParen);
+        assert_eq!(lexer.get_next_token(), Token::EOF);
     }
 }

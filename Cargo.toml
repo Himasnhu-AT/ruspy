@@ -10,3 +10,5 @@ repository = "https://github.com/Himasnhu-at/ruspy.git"
 license = "BSD-Clause-3"
 
 [dependencies]
+env_logger = "0.11.5"
+log = "0.4.22"
