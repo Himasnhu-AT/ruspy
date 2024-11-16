@@ -1,6 +1,7 @@
 mod interpreter;
 mod lexer;
 mod parser;
+mod types;
 
 use env_logger;
 use interpreter::Interpreter;
@@ -8,13 +9,14 @@ use lexer::Lexer;
 use log::info;
 use parser::Parser;
 
-fn main() {
+fn main() -> Result<(), String> {
     env_logger::init();
     info!("Starting Ruspy interpreter");
 
     let input = "
-    a = 3 + 5 * (10 - 4);
-    b = a * 2;
+    abc: int = 10-4;
+    a: int = 3 + 5 * abc;
+    b: int = a * 2;
     b;
     ";
     info!("Processing input: {}", input);
@@ -22,10 +24,12 @@ fn main() {
     let lexer = Lexer::new(input);
     let mut parser = Parser::new(lexer);
 
-    let ast = parser.parse();
-    info!("Generated AST: {:?}", ast);
+    let ast = parser.parse()?;
+    println!("Generated AST: {:?}", ast);
 
     let mut interpreter = Interpreter::new();
-    let result = interpreter.interpret(ast);
-    info!("Final result: {}", result);
+    let result = interpreter.interpret(ast)?;
+    println!("Final result: {:?}", result);
+
+    Ok(())
 }
