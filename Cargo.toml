@@ -10,5 +10,17 @@ repository = "https://github.com/Himasnhu-at/ruspy.git"
 license = "BSD-Clause-3"
 
 [dependencies]
+dotenv = "0.15.0"
 env_logger = "0.11.5"
 log = "0.4.22"
+
+[profile.release]
+opt-level = 3        # Maximum optimization
+lto = true          # Enable link-time optimization
+codegen-units = 1   # Reduce parallel code generation units to increase optimization
+panic = 'abort'     # Remove panic unwinding to reduce binary size
+strip = true        # Strip symbols from binary
+
+[[bin]]
+name = "ruspy"
+path = "src/main.rs"

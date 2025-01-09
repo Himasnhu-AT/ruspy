@@ -140,6 +140,7 @@ impl Div for RuspyType {
 }
 
 // Implementation for type inference
+#[allow(dead_code)]
 pub fn infer_type(value: &str) -> RuspyType {
     if let Ok(i) = value.parse::<i32>() {
         RuspyType::Int(i)

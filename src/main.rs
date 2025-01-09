@@ -3,6 +3,7 @@ mod lexer;
 mod parser;
 mod types;
 
+use dotenv::dotenv;
 use env_logger;
 use interpreter::Interpreter;
 use lexer::Lexer;
@@ -10,6 +11,7 @@ use log::info;
 use parser::Parser;
 
 fn main() -> Result<(), String> {
+    dotenv().ok();
     env_logger::init();
     info!("Starting Ruspy interpreter");
 

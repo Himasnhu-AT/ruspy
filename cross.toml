@@ -1,0 +1,8 @@
+[target.x86_64-unknown-linux-musl]
+image = "rustembedded/cross:x86_64-unknown-linux-musl"
+
+[target.x86_64-pc-windows-gnu]
+image = "rustembedded/cross:x86_64-pc-windows-gnu"
+
+[target.aarch64-apple-darwin]
+# Remove the Docker image specification since we'll build natively on macOS
