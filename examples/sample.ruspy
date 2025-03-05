@@ -1,0 +1,17 @@
+// Sample Ruspy program demonstrating variables, printing and BODMAS calculations
+
+// Variable declarations
+x: int64 = 10;
+y: int64 = 5;
+
+// Mathematical operations following BODMAS
+result: int64 = (x + y) * 2 / (5 - 2);
+print result;  // Should output 10
+
+// Complex expression
+complex: int64 = x * (y + 3) - 2;  // Should calculate following BODMAS
+print complex;  
+
+// String output
+message: str = "Hello, Ruspy!";
+print message;

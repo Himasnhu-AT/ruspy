@@ -4,6 +4,7 @@ use crate::lexer::Token;
 use crate::parser::ASTNode;
 use crate::types::RuspyType;
 use std::collections::HashMap;
+use log::info;
 
 /// Represents the interpreter state and execution environment
 ///
@@ -57,6 +58,9 @@ impl Interpreter {
         match node {
             // Handle literal numbers
             ASTNode::Number(value) => Ok(RuspyType::Int64(value)),
+            
+            // Handle string literals
+            ASTNode::StringLiteral(value) => Ok(RuspyType::Str(value)),
 
             // Handle variable assignment without type annotation
             ASTNode::VarAssign(name, expr) => {
@@ -108,6 +112,27 @@ impl Interpreter {
                     _ => Err(format!("Unexpected operator in binary operation")),
                 }
             }
+
+            // Handle Print statements
+            ASTNode::Print(expr) => {
+                let value = self.interpret_node(*expr)?;
+                info!("Output: {}", self.format_value(&value));
+                Ok(value)
+            },
+        }
+    }
+    
+    // Helper function to format values for printing
+    fn format_value(&self, value: &RuspyType) -> String {
+        match value {
+            RuspyType::Int(n) => n.to_string(),
+            RuspyType::Int32(n) => n.to_string(),
+            RuspyType::Int64(n) => n.to_string(),
+            RuspyType::Float(n) => n.to_string(),
+            RuspyType::Float32(n) => n.to_string(),
+            RuspyType::Float64(n) => n.to_string(),
+            RuspyType::Str(s) => s.clone(),
+            RuspyType::Char(c) => c.to_string(),
         }
     }
 

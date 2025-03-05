@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2024-11-18
+
+### Added
+- Implemented CLI interface with file input support
+- Added debug mode flag (-d) to display AST and execution flow
+- Added support for print statements
+- Improved error handling and reporting
+- Enhanced BODMAS implementation for mathematical expressions
+- Added example Ruspy programs
+
 ## [0.1.0] - 2024-11-16
 
 ### Added

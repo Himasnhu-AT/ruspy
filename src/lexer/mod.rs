@@ -38,15 +38,26 @@ pub enum Token {
     TypeStr8,
     TypeStr32,
     TypeStr64,
+
+    // Add print keyword
+    Print,
+
+    // Add string literals
+    StringLiteral(String),
 }
 
 /// Lexer struct responsible for tokenizing input source code
 /// Maintains state about the current position in the input stream
+#[derive(Clone)]
 pub struct Lexer<'a> {
     /// Iterator over the input characters
     input: Chars<'a>,
     /// Current character being processed
     current_char: Option<char>,
+    /// Source text for cloning purposes
+    source: &'a str,
+    /// Current position in the input
+    position: usize,
 }
 
 impl<'a> Lexer<'a> {
@@ -61,6 +72,8 @@ impl<'a> Lexer<'a> {
         let mut lexer = Lexer {
             input: input.chars(),
             current_char: None,
+            source: input,
+            position: 0,
         };
         lexer.advance();
         lexer
@@ -114,7 +127,22 @@ impl<'a> Lexer<'a> {
                 }
                 '/' => {
                     self.advance();
-                    return Token::Slash;
+                    // Check if it's a comment (// for line comment)
+                    if let Some('/') = self.current_char {
+                        self.advance(); // consume the second '/'
+                        // Skip everything until end of line or end of file
+                        while let Some(c) = self.current_char {
+                            if c == '\n' {
+                                self.advance(); // consume the newline
+                                break;
+                            }
+                            self.advance(); // consume the comment character
+                        }
+                        // After skipping the comment, get the next token
+                        return self.get_next_token();
+                    } else {
+                        return Token::Slash;
+                    }
                 }
                 '(' => {
                     self.advance();
@@ -135,6 +163,9 @@ impl<'a> Lexer<'a> {
                 ':' => {
                     self.advance();
                     return Token::Colon;
+                }
+                '"' => {
+                    return self.string_literal();
                 }
                 _ => panic!("Unexpected character: {}", c),
             }
@@ -171,6 +202,7 @@ impl<'a> Lexer<'a> {
             "str8" => Token::TypeStr8,
             "str32" => Token::TypeStr32,
             "str64" => Token::TypeStr64,
+            "print" => Token::Print,
             _ => Token::Identifier(result),
         }
     }
@@ -194,6 +226,30 @@ impl<'a> Lexer<'a> {
             }
         }
         Token::Number(result.parse::<i64>().unwrap())
+    }
+
+    /// Processes and returns a string literal token
+    ///
+    /// # Returns
+    /// * A StringLiteral Token containing the parsed string
+    ///
+    /// # Panics
+    /// * When the string is not properly terminated
+    fn string_literal(&mut self) -> Token {
+        self.advance(); // Skip the opening quote
+        let mut result = String::new();
+
+        // Collect characters until closing quote
+        while let Some(c) = self.current_char {
+            if c == '"' {
+                self.advance(); // Skip the closing quote
+                return Token::StringLiteral(result);
+            }
+            result.push(c);
+            self.advance();
+        }
+
+        panic!("Unterminated string literal");
     }
 }
 
@@ -256,5 +312,23 @@ mod tests {
             lexer.get_next_token();
         });
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_lexer_comments() {
+        let mut lexer = Lexer::new("42 // This is a comment\n+ 58");
+        assert_eq!(lexer.get_next_token(), Token::Number(42));
+        assert_eq!(lexer.get_next_token(), Token::Plus);
+        assert_eq!(lexer.get_next_token(), Token::Number(58));
+        assert_eq!(lexer.get_next_token(), Token::EOF);
+    }
+
+    #[test]
+    fn test_lexer_comments_at_end() {
+        let mut lexer = Lexer::new("42 + 58 // Final comment");
+        assert_eq!(lexer.get_next_token(), Token::Number(42));
+        assert_eq!(lexer.get_next_token(), Token::Plus);
+        assert_eq!(lexer.get_next_token(), Token::Number(58));
+        assert_eq!(lexer.get_next_token(), Token::EOF);
     }
 }

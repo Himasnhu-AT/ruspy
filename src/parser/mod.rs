@@ -15,6 +15,8 @@ use log::{debug, error};
 pub enum ASTNode {
     /// Represents a numeric literal value
     Number(i64),
+    /// Represents a string literal value
+    StringLiteral(String),
     /// Represents a variable reference
     Identifier(String),
     /// Represents a binary operation (e.g., addition, multiplication)
@@ -23,6 +25,8 @@ pub enum ASTNode {
     VarAssign(String, Box<ASTNode>),
     /// Represents a typed variable assignment with type annotation
     TypedVarAssign(String, RuspyType, Box<ASTNode>),
+    /// Represents a print statement
+    Print(Box<ASTNode>),
 }
 
 /// Parser struct that maintains the state during parsing
@@ -56,24 +60,23 @@ impl<'a> Parser<'a> {
     /// # Arguments
     /// * `expected_token` - The token type that is expected at this point
     ///
-    /// # Panics
-    /// * When the current token doesn't match the expected token
-    fn eat(&mut self, expected_token: Token) {
+    /// # Returns
+    /// * Result<(), String> - Ok if token is consumed, Err with message if not
+    fn eat(&mut self, expected_token: Token) -> Result<(), String> {
         debug!("Attempting to eat token: {:?}", expected_token);
         debug!("Current token: {:?}", self.current_token);
 
-        if self.current_token == expected_token {
+        if std::mem::discriminant(&self.current_token) == std::mem::discriminant(&expected_token) {
             self.current_token = self.lexer.get_next_token();
-            debug!(
-                "Token eaten successfully, next token: {:?}",
-                self.current_token
-            );
+            debug!("Token eaten successfully, next token: {:?}", self.current_token);
+            Ok(())
         } else {
-            error!(
+            let error_msg = format!(
                 "Parser error: Expected token {:?}, found {:?}",
                 expected_token, self.current_token
             );
-            panic!("Unexpected token: {:?}", self.current_token);
+            error!("{}", error_msg);
+            Err(error_msg)
         }
     }
 
@@ -86,89 +89,138 @@ impl<'a> Parser<'a> {
     /// # Returns
     /// * `Result<Vec<ASTNode>, String>` - Either a vector of AST nodes or an error message
     pub fn parse(&mut self) -> Result<Vec<ASTNode>, String> {
-        let mut nodes = Vec::new();
-
+        let mut statements = Vec::new();
+        
         while self.current_token != Token::EOF {
-            debug!("Processing token: {:?}", self.current_token);
-
-            // Skip any extra semicolons
-            while self.current_token == Token::Semicolon {
-                debug!("Skipping semicolon");
-                self.eat(Token::Semicolon);
-            }
-
-            // If we've reached EOF after skipping semicolons, break
-            if self.current_token == Token::EOF {
-                debug!("Reached EOF, breaking");
-                break;
-            }
-
-            let node = if let Token::Identifier(_) = self.current_token {
-                let current_ident = self.current_token.clone();
-                self.eat(current_ident.clone());
-
-                match self.current_token {
-                    Token::Assign => {
-                        // This is a variable assignment
-                        debug!("Parsing variable assignment");
-                        self.eat(Token::Assign);
-                        let expr = self.expr()?;
-                        if let Token::Identifier(name) = current_ident {
-                            Ok(ASTNode::VarAssign(name, Box::new(expr)))
-                        } else {
-                            unreachable!()
-                        }
-                    }
-                    Token::Colon => {
-                        // This is a typed variable assignment
-                        debug!("Parsing typed variable assignment");
-                        self.eat(Token::Colon);
-                        let var_type = match self.current_token {
-                            Token::TypeInt => RuspyType::Int(0),
-                            Token::TypeInt32 => RuspyType::Int32(0),
-                            Token::TypeInt64 => RuspyType::Int64(0),
-                            Token::TypeFloat => RuspyType::Float(0.0),
-                            Token::TypeFloat32 => RuspyType::Float32(0.0),
-                            Token::TypeFloat64 => RuspyType::Float64(0.0),
-                            Token::TypeChar => RuspyType::Char('\0'),
-                            Token::TypeStr => RuspyType::Str(String::new()),
-                            Token::TypeStr8 => RuspyType::Str8(String::new()),
-                            Token::TypeStr32 => RuspyType::Str32(String::new()),
-                            Token::TypeStr64 => RuspyType::Str64(String::new()),
-                            _ => return Err("Invalid type annotation".to_string()),
-                        };
-                        self.eat(self.current_token.clone());
-                        self.eat(Token::Assign);
-                        let expr = self.expr()?;
-                        if let Token::Identifier(name) = current_ident {
-                            Ok(ASTNode::TypedVarAssign(name, var_type, Box::new(expr)))
-                        } else {
-                            unreachable!()
-                        }
-                    }
-                    _ => {
-                        // This is a variable reference
-                        debug!("Parsing variable reference");
-                        if let Token::Identifier(name) = current_ident {
-                            Ok(ASTNode::Identifier(name))
-                        } else {
-                            unreachable!()
-                        }
-                    }
-                }
-            } else {
-                debug!("Parsing expression");
-                self.expr()
-            }?;
-
-            nodes.push(node);
-
-            if self.current_token == Token::Semicolon {
-                self.eat(Token::Semicolon);
-            }
+            let statement = self.statement()?;
+            statements.push(statement);
         }
+        
+        Ok(statements)
+    }
 
-        Ok(nodes)
+    fn statement(&mut self) -> Result<ASTNode, String> {
+        match &self.current_token {
+            Token::Print => self.print_statement(),
+            Token::Identifier(_) => {
+                if self.peek_next() == Some(Token::Colon) {
+                    self.variable_declaration_with_type()
+                } else if self.peek_next() == Some(Token::Assign) {
+                    self.variable_declaration_without_type()
+                } else {
+                    self.expression_statement()
+                }
+            },
+            _ => self.expression_statement(),
+        }
+    }
+
+    fn variable_declaration_with_type(&mut self) -> Result<ASTNode, String> {
+        // Get variable name
+        let name = match &self.current_token {
+            Token::Identifier(name) => name.clone(),
+            _ => return Err("Expected identifier".to_string()),
+        };
+        self.eat(Token::Identifier(name.clone()))?;
+        
+        // Expect colon
+        self.eat(Token::Colon)?;
+        
+        // Get type
+        let var_type = self.parse_type()?;
+        
+        // Expect assignment
+        self.eat(Token::Assign)?;
+        
+        // Get expression value
+        let value = self.expr()?;
+        
+        // Expect semicolon
+        self.eat(Token::Semicolon)?;
+        
+        Ok(ASTNode::TypedVarAssign(name, var_type, Box::new(value)))
+    }
+
+    fn variable_declaration_without_type(&mut self) -> Result<ASTNode, String> {
+        // Get variable name
+        let name = match &self.current_token {
+            Token::Identifier(name) => name.clone(),
+            _ => return Err("Expected identifier".to_string()),
+        };
+        self.eat(Token::Identifier(name.clone()))?;
+        
+        // Expect assignment
+        self.eat(Token::Assign)?;
+        
+        // Get expression value
+        let value = self.expr()?;
+        
+        // Expect semicolon
+        self.eat(Token::Semicolon)?;
+        
+        Ok(ASTNode::VarAssign(name, Box::new(value)))
+    }
+
+    fn parse_type(&mut self) -> Result<RuspyType, String> {
+        match &self.current_token {
+            Token::TypeInt => {
+                self.eat(Token::TypeInt)?;
+                Ok(RuspyType::Int(0))
+            },
+            Token::TypeInt32 => {
+                self.eat(Token::TypeInt32)?;
+                Ok(RuspyType::Int32(0))
+            },
+            Token::TypeInt64 => {
+                self.eat(Token::TypeInt64)?;
+                Ok(RuspyType::Int64(0))
+            },
+            Token::TypeFloat => {
+                self.eat(Token::TypeFloat)?;
+                Ok(RuspyType::Float(0.0))
+            },
+            Token::TypeFloat32 => {
+                self.eat(Token::TypeFloat32)?;
+                Ok(RuspyType::Float32(0.0))
+            },
+            Token::TypeFloat64 => {
+                self.eat(Token::TypeFloat64)?;
+                Ok(RuspyType::Float64(0.0))
+            },
+            Token::TypeStr => {
+                self.eat(Token::TypeStr)?;
+                Ok(RuspyType::Str(String::new()))
+            },
+            Token::TypeChar => {
+                self.eat(Token::TypeChar)?;
+                Ok(RuspyType::Char('\0'))
+            },
+            _ => Err(format!("Invalid type: {:?}", self.current_token)),
+        }
+    }
+
+    // Helper method to peek at the next token without consuming it
+    fn peek_next(&self) -> Option<Token> {
+        let mut lexer_clone = self.lexer.clone();
+        let current_token_clone = self.current_token.clone();
+        
+        // Advance and get the next token
+        let next_token = lexer_clone.get_next_token();
+        
+        Some(next_token)
+    }
+
+    fn print_statement(&mut self) -> Result<ASTNode, String> {
+        self.eat(Token::Print)?;
+        let expr = self.expr()?;
+        self.eat(Token::Semicolon)?;
+        Ok(ASTNode::Print(Box::new(expr)))
+    }
+
+    fn expression_statement(&mut self) -> Result<ASTNode, String> {
+        let expr = self.expr()?;
+        self.eat(Token::Semicolon)?;
+        Ok(expr)
     }
 
     /// Parses an expression
@@ -183,7 +235,7 @@ impl<'a> Parser<'a> {
 
         while matches!(self.current_token, Token::Plus | Token::Minus) {
             let token = self.current_token.clone();
-            self.eat(token.clone());
+            self.eat(token.clone())?;
             node = ASTNode::BinaryOp(Box::new(node), token, Box::new(self.term()?));
         }
 
@@ -202,7 +254,7 @@ impl<'a> Parser<'a> {
 
         while matches!(self.current_token, Token::Asterisk | Token::Slash) {
             let token = self.current_token.clone();
-            self.eat(token.clone());
+            self.eat(token.clone())?;
             node = ASTNode::BinaryOp(Box::new(node), token, Box::new(self.factor()?));
         }
 
@@ -217,23 +269,29 @@ impl<'a> Parser<'a> {
     /// # Returns
     /// * `Result<ASTNode, String>` - The parsed factor or an error
     fn factor(&mut self) -> Result<ASTNode, String> {
-        match self.current_token {
+        match &self.current_token {
             Token::Number(value) => {
-                self.eat(Token::Number(value));
+                let value = *value;
+                self.eat(Token::Number(value))?;
                 Ok(ASTNode::Number(value))
-            }
+            },
+            Token::StringLiteral(text) => {
+                let text = text.clone();
+                self.eat(Token::StringLiteral(text.clone()))?;
+                Ok(ASTNode::StringLiteral(text))
+            },
             Token::Identifier(ref name) => {
                 let name = name.clone();
-                self.eat(Token::Identifier(name.clone()));
+                self.eat(Token::Identifier(name.clone()))?;
                 Ok(ASTNode::Identifier(name))
-            }
+            },
             Token::LParen => {
-                self.eat(Token::LParen);
+                self.eat(Token::LParen)?;
                 let node = self.expr()?;
-                self.eat(Token::RParen);
+                self.eat(Token::RParen)?;
                 Ok(node)
-            }
-            _ => Err("Unexpected token: {:?}".to_string()),
+            },
+            _ => Err(format!("Unexpected token: {:?}", self.current_token)),
         }
     }
 }

@@ -1,16 +1,54 @@
 # Ruspy
 
-Ruspy is a project that aims to combine the efficiency of Rust with the simplicity and readability of Python. This project is designed to provide a syntax that is easy to learn and use, while maintaining high performance.
-
-> [!IMPORTANT]
-> This is concept language compiler, not suggested for production use.
-> Just wanted to learn compiler design along with rust
+A simple interpreter written in Rust that supports basic variable declarations, printing output, and mathematical calculations following BODMAS (Brackets, Orders, Division, Multiplication, Addition, Subtraction).
 
 ## Features
 
-- Rust-like performance
-- Python-like syntax
-- Easy to learn and use
+- Variable declaration and assignment with optional type annotations
+- Mathematical operations with proper operator precedence (BODMAS)
+- Print statements for output
+- String and numeric literal support
+
+## Usage
+
+Run the interpreter on a source file:
+
+```bash
+cargo run -- path/to/file.ruspy
+```
+
+With debug mode to print AST and execution flow:
+
+```bash
+cargo run -- -d path/to/file.ruspy
+```
+
+## Example Code
+
+```ruspy
+// Variable declarations
+x: int64 = 10;
+y: int64 = 5;
+
+// Mathematical operations following BODMAS
+result: int64 = (x + y) * 2 / (5 - 2);
+print result;  // Should output 10
+
+// Complex expression
+complex: int64 = x * (y + 3) - 2 ^ 2;
+print complex;  // Should calculate following BODMAS
+
+// String output
+message: str = "Hello, Ruspy!";
+print message;
+```
+
+## Implementation Details
+
+The interpreter follows a classic compiler pipeline:
+1. Lexer: Tokenizes the source code
+2. Parser: Builds an Abstract Syntax Tree (AST) from tokens
+3. Interpreter: Evaluates the AST and executes the program
 
 ## Getting Started
 

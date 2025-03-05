@@ -1,0 +1,273 @@
+Building the project...
+warning: unused variable: `current_token_clone`
+   --> src/parser/mod.rs:205:13
+    |
+205 |         let current_token_clone = self.current_token.clone();
+    |             ^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_current_token_clone`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: fields `source` and `position` are never read
+  --> src/lexer/mod.rs:58:5
+   |
+52 | pub struct Lexer<'a> {
+   |            ----- fields in this struct
+...
+58 |     source: &'a str,
+   |     ^^^^^^
+59 |     /// Current position in the input
+60 |     position: usize,
+   |     ^^^^^^^^
+   |
+   = note: `Lexer` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `ruspy` (bin "ruspy") generated 2 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
+Running sample.ruspy with debug mode...
+warning: unused variable: `current_token_clone`
+   --> src/parser/mod.rs:205:13
+    |
+205 |         let current_token_clone = self.current_token.clone();
+    |             ^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_current_token_clone`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: fields `source` and `position` are never read
+  --> src/lexer/mod.rs:58:5
+   |
+52 | pub struct Lexer<'a> {
+   |            ----- fields in this struct
+...
+58 |     source: &'a str,
+   |     ^^^^^^
+59 |     /// Current position in the input
+60 |     position: usize,
+   |     ^^^^^^^^
+   |
+   = note: `Lexer` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `ruspy` (bin "ruspy") generated 2 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running `target/debug/ruspy -d examples/sample.ruspy`
+[2025-03-05T17:52:41Z INFO  ruspy] Starting Ruspy interpreter
+[2025-03-05T17:52:41Z INFO  ruspy] Processing file: examples/sample.ruspy
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Initial token: Identifier("x")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Identifier("x")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Identifier("x")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Colon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Colon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Colon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: TypeInt64
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: TypeInt64
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: TypeInt64
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Assign
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Assign
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Assign
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Number(10)
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Number(10)
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Number(10)
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Identifier("y")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Identifier("y")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Identifier("y")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Colon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Colon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Colon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: TypeInt64
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: TypeInt64
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: TypeInt64
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Assign
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Assign
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Assign
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Number(5)
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Number(5)
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Number(5)
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Identifier("result")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Identifier("result")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Identifier("result")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Colon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Colon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Colon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: TypeInt64
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: TypeInt64
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: TypeInt64
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Assign
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Assign
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Assign
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: LParen
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: LParen
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: LParen
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Identifier("x")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Identifier("x")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Identifier("x")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Plus
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Plus
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Plus
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Identifier("y")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Identifier("y")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Identifier("y")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: RParen
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: RParen
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: RParen
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Asterisk
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Asterisk
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Asterisk
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Number(2)
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Number(2)
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Number(2)
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Slash
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Slash
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Slash
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: LParen
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: LParen
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: LParen
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Number(5)
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Number(5)
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Number(5)
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Minus
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Minus
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Minus
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Number(2)
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Number(2)
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Number(2)
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: RParen
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: RParen
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: RParen
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Print
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Print
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Print
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Identifier("result")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Identifier("result")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Identifier("result")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Identifier("complex")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Identifier("complex")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Identifier("complex")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Colon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Colon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Colon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: TypeInt64
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: TypeInt64
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: TypeInt64
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Assign
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Assign
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Assign
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Identifier("x")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Identifier("x")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Identifier("x")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Asterisk
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Asterisk
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Asterisk
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: LParen
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: LParen
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: LParen
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Identifier("y")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Identifier("y")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Identifier("y")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Plus
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Plus
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Plus
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Number(3)
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Number(3)
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Number(3)
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: RParen
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: RParen
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: RParen
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Minus
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Minus
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Minus
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Number(2)
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Number(2)
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Number(2)
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Print
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Print
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Print
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Identifier("complex")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Identifier("complex")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Identifier("complex")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Identifier("message")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Identifier("message")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Identifier("message")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Colon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Colon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Colon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: TypeStr
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: TypeStr
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: TypeStr
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Assign
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Assign
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Assign
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: StringLiteral("Hello, Ruspy!")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: StringLiteral("Hello, Ruspy!")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: StringLiteral("Hello, Ruspy!")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Print
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Print
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Print
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Identifier("message")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Identifier("message")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Identifier("message")
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Attempting to eat token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Current token: Semicolon
+[2025-03-05T17:52:41Z DEBUG ruspy::parser] Token eaten successfully, next token: EOF
+[2025-03-05T17:52:41Z DEBUG ruspy] Generated AST: [TypedVarAssign("x", Int64(0), Number(10)), TypedVarAssign("y", Int64(0), Number(5)), TypedVarAssign("result", Int64(0), BinaryOp(BinaryOp(BinaryOp(Identifier("x"), Plus, Identifier("y")), Asterisk, Number(2)), Slash, BinaryOp(Number(5), Minus, Number(2)))), Print(Identifier("result")), TypedVarAssign("complex", Int64(0), BinaryOp(BinaryOp(Identifier("x"), Asterisk, BinaryOp(Identifier("y"), Plus, Number(3))), Minus, Number(2))), Print(Identifier("complex")), TypedVarAssign("message", Str(""), StringLiteral("Hello, Ruspy!")), Print(Identifier("message"))]
+[2025-03-05T17:52:41Z INFO  ruspy::interpreter] Output: 10
+[2025-03-05T17:52:41Z INFO  ruspy::interpreter] Output: 78
+[2025-03-05T17:52:41Z INFO  ruspy::interpreter] Output: Hello, Ruspy!
+[2025-03-05T17:52:41Z INFO  ruspy] Execution completed successfully
+[2025-03-05T17:52:41Z INFO  ruspy] Final result: Str("Hello, Ruspy!")
+Running sample.ruspy without debug mode...
+warning: unused variable: `current_token_clone`
+   --> src/parser/mod.rs:205:13
+    |
+205 |         let current_token_clone = self.current_token.clone();
+    |             ^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_current_token_clone`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: fields `source` and `position` are never read
+  --> src/lexer/mod.rs:58:5
+   |
+52 | pub struct Lexer<'a> {
+   |            ----- fields in this struct
+...
+58 |     source: &'a str,
+   |     ^^^^^^
+59 |     /// Current position in the input
+60 |     position: usize,
+   |     ^^^^^^^^
+   |
+   = note: `Lexer` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `ruspy` (bin "ruspy") generated 2 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running `target/debug/ruspy examples/sample.ruspy`
+[2025-03-05T17:52:41Z INFO  ruspy] Starting Ruspy interpreter
+[2025-03-05T17:52:41Z INFO  ruspy] Processing file: examples/sample.ruspy
+[2025-03-05T17:52:41Z INFO  ruspy::interpreter] Output: 10
+[2025-03-05T17:52:41Z INFO  ruspy::interpreter] Output: 78
+[2025-03-05T17:52:41Z INFO  ruspy::interpreter] Output: Hello, Ruspy!
+[2025-03-05T17:52:41Z INFO  ruspy] Execution completed successfully
+[2025-03-05T17:52:41Z INFO  ruspy] Final result: Str("Hello, Ruspy!")

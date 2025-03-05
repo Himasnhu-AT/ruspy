@@ -1,6 +1,8 @@
-use std::ops::{Add, Div, Mul, Sub};
+use std::fmt;
+use std::ops::{Add, Sub, Mul, Div};
 
-#[derive(Debug, Clone, PartialEq)]
+/// Represents the supported data types in Ruspy
+#[derive(Debug, PartialEq, Clone)]
 pub enum RuspyType {
     Int(i32),
     Int32(i32),
@@ -8,46 +10,56 @@ pub enum RuspyType {
     Float(f64),
     Float32(f32),
     Float64(f64),
-    Char(char),
     Str(String),
-    Str8(String),
-    Str32(String),
-    Str64(String),
+    Char(char),
 }
 
 impl RuspyType {
     pub fn is_compatible_with(&self, other: &RuspyType) -> bool {
         match (self, other) {
-            // Allow Int64 to be compatible with Int
-            (RuspyType::Int(_), RuspyType::Int64(_)) => true,
-            (RuspyType::Int(_), RuspyType::Int(_)) => true,
-
-            // Allow Int32 to be assigned to Int64 or Int
-            (RuspyType::Int64(_), RuspyType::Int32(_)) => true,
-            (RuspyType::Int(_), RuspyType::Int32(_)) => true,
-            (RuspyType::Int32(_), RuspyType::Int32(_)) => true,
-
-            // Keep existing Int64 compatibility
-            (RuspyType::Int64(_), RuspyType::Int64(_)) => true,
-
-            // Other types remain strictly matched
-            (RuspyType::Float(_), RuspyType::Float(_)) => true,
-            (RuspyType::Float32(_), RuspyType::Float32(_)) => true,
-            (RuspyType::Float64(_), RuspyType::Float64(_)) => true,
-            (RuspyType::Char(_), RuspyType::Char(_)) => true,
+            // Integers are compatible with each other
+            (RuspyType::Int(_), RuspyType::Int(_) | RuspyType::Int32(_) | RuspyType::Int64(_)) => true,
+            (RuspyType::Int32(_), RuspyType::Int(_) | RuspyType::Int32(_) | RuspyType::Int64(_)) => true,
+            (RuspyType::Int64(_), RuspyType::Int(_) | RuspyType::Int32(_) | RuspyType::Int64(_)) => true,
+            
+            // Floats are compatible with each other
+            (RuspyType::Float(_), RuspyType::Float(_) | RuspyType::Float32(_) | RuspyType::Float64(_)) => true,
+            (RuspyType::Float32(_), RuspyType::Float(_) | RuspyType::Float32(_) | RuspyType::Float64(_)) => true,
+            (RuspyType::Float64(_), RuspyType::Float(_) | RuspyType::Float32(_) | RuspyType::Float64(_)) => true,
+            
+            // Strings are only compatible with strings
             (RuspyType::Str(_), RuspyType::Str(_)) => true,
-            (RuspyType::Str8(_), RuspyType::Str8(_)) => true,
-            (RuspyType::Str32(_), RuspyType::Str32(_)) => true,
-            (RuspyType::Str64(_), RuspyType::Str64(_)) => true,
+            
+            // Characters are only compatible with characters
+            (RuspyType::Char(_), RuspyType::Char(_)) => true,
+            
+            // Everything else is incompatible
             _ => false,
         }
     }
 }
 
-impl Add for RuspyType {
-    type Output = RuspyType;
+impl fmt::Display for RuspyType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            RuspyType::Int(val) => write!(f, "{}", val),
+            RuspyType::Int32(val) => write!(f, "{}", val),
+            RuspyType::Int64(val) => write!(f, "{}", val),
+            RuspyType::Float(val) => write!(f, "{}", val),
+            RuspyType::Float32(val) => write!(f, "{}", val),
+            RuspyType::Float64(val) => write!(f, "{}", val),
+            RuspyType::Str(val) => write!(f, "{}", val),
+            RuspyType::Char(val) => write!(f, "{}", val),
+        }
+    }
+}
 
-    fn add(self, other: RuspyType) -> RuspyType {
+// Implement operator overloading for RuspyType
+
+impl Add for RuspyType {
+    type Output = Self;
+    
+    fn add(self, other: Self) -> Self {
         match (self, other) {
             (RuspyType::Int(a), RuspyType::Int(b)) => RuspyType::Int(a + b),
             (RuspyType::Int32(a), RuspyType::Int32(b)) => RuspyType::Int32(a + b),
@@ -55,16 +67,16 @@ impl Add for RuspyType {
             (RuspyType::Float(a), RuspyType::Float(b)) => RuspyType::Float(a + b),
             (RuspyType::Float32(a), RuspyType::Float32(b)) => RuspyType::Float32(a + b),
             (RuspyType::Float64(a), RuspyType::Float64(b)) => RuspyType::Float64(a + b),
-            (RuspyType::Str(a), RuspyType::Str(b)) => RuspyType::Str(a + &b),
-            _ => panic!("Unsupported operand types for addition"),
+            (RuspyType::Str(a), RuspyType::Str(b)) => RuspyType::Str(format!("{}{}", a, b)),
+            _ => panic!("Incompatible types for addition")
         }
     }
 }
 
 impl Sub for RuspyType {
-    type Output = RuspyType;
-
-    fn sub(self, other: RuspyType) -> RuspyType {
+    type Output = Self;
+    
+    fn sub(self, other: Self) -> Self {
         match (self, other) {
             (RuspyType::Int(a), RuspyType::Int(b)) => RuspyType::Int(a - b),
             (RuspyType::Int32(a), RuspyType::Int32(b)) => RuspyType::Int32(a - b),
@@ -72,15 +84,15 @@ impl Sub for RuspyType {
             (RuspyType::Float(a), RuspyType::Float(b)) => RuspyType::Float(a - b),
             (RuspyType::Float32(a), RuspyType::Float32(b)) => RuspyType::Float32(a - b),
             (RuspyType::Float64(a), RuspyType::Float64(b)) => RuspyType::Float64(a - b),
-            _ => panic!("Unsupported operand types for subtraction"),
+            _ => panic!("Incompatible types for subtraction")
         }
     }
 }
 
 impl Mul for RuspyType {
-    type Output = RuspyType;
-
-    fn mul(self, other: RuspyType) -> RuspyType {
+    type Output = Self;
+    
+    fn mul(self, other: Self) -> Self {
         match (self, other) {
             (RuspyType::Int(a), RuspyType::Int(b)) => RuspyType::Int(a * b),
             (RuspyType::Int32(a), RuspyType::Int32(b)) => RuspyType::Int32(a * b),
@@ -88,53 +100,41 @@ impl Mul for RuspyType {
             (RuspyType::Float(a), RuspyType::Float(b)) => RuspyType::Float(a * b),
             (RuspyType::Float32(a), RuspyType::Float32(b)) => RuspyType::Float32(a * b),
             (RuspyType::Float64(a), RuspyType::Float64(b)) => RuspyType::Float64(a * b),
-            _ => panic!("Unsupported operand types for multiplication"),
+            _ => panic!("Incompatible types for multiplication")
         }
     }
 }
 
 impl Div for RuspyType {
-    type Output = RuspyType;
-
-    fn div(self, other: RuspyType) -> RuspyType {
+    type Output = Self;
+    
+    fn div(self, other: Self) -> Self {
         match (self, other) {
             (RuspyType::Int(a), RuspyType::Int(b)) => {
-                if b == 0 {
-                    panic!("Division by zero");
-                }
+                if b == 0 { panic!("Division by zero"); }
                 RuspyType::Int(a / b)
-            }
+            },
             (RuspyType::Int32(a), RuspyType::Int32(b)) => {
-                if b == 0 {
-                    panic!("Division by zero");
-                }
+                if b == 0 { panic!("Division by zero"); }
                 RuspyType::Int32(a / b)
-            }
+            },
             (RuspyType::Int64(a), RuspyType::Int64(b)) => {
-                if b == 0 {
-                    panic!("Division by zero");
-                }
+                if b == 0 { panic!("Division by zero"); }
                 RuspyType::Int64(a / b)
-            }
+            },
             (RuspyType::Float(a), RuspyType::Float(b)) => {
-                if b == 0.0 {
-                    panic!("Division by zero");
-                }
+                if b == 0.0 { panic!("Division by zero"); }
                 RuspyType::Float(a / b)
-            }
+            },
             (RuspyType::Float32(a), RuspyType::Float32(b)) => {
-                if b == 0.0 {
-                    panic!("Division by zero");
-                }
+                if b == 0.0 { panic!("Division by zero"); }
                 RuspyType::Float32(a / b)
-            }
+            },
             (RuspyType::Float64(a), RuspyType::Float64(b)) => {
-                if b == 0.0 {
-                    panic!("Division by zero");
-                }
+                if b == 0.0 { panic!("Division by zero"); }
                 RuspyType::Float64(a / b)
-            }
-            _ => panic!("Unsupported operand types for division"),
+            },
+            _ => panic!("Incompatible types for division")
         }
     }
 }
