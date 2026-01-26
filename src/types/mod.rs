@@ -2,7 +2,10 @@ use std::fmt;
 use std::ops::{Add, Sub, Mul, Div};
 
 /// Represents the supported data types in Ruspy
-#[derive(Debug, PartialEq, Clone)]
+use serde::{Deserialize, Serialize};
+
+/// Represents the supported data types in Ruspy
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub enum RuspyType {
     Int(i32),
     Int32(i32),
@@ -12,6 +15,9 @@ pub enum RuspyType {
     Float64(f64),
     Str(String),
     Char(char),
+    Bool(bool),
+    Object(String), // Helper for external objects
+    Void,
 }
 
 impl RuspyType {
@@ -50,6 +56,9 @@ impl fmt::Display for RuspyType {
             RuspyType::Float64(val) => write!(f, "{}", val),
             RuspyType::Str(val) => write!(f, "{}", val),
             RuspyType::Char(val) => write!(f, "{}", val),
+            RuspyType::Bool(val) => write!(f, "{}", val),
+            RuspyType::Object(val) => write!(f, "Object({})", val),
+            RuspyType::Void => write!(f, "void"),
         }
     }
 }

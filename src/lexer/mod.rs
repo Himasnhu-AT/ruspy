@@ -1,12 +1,14 @@
 use std::str::Chars;
+use serde::{Deserialize, Serialize};
 
 /// Token enumeration representing different lexical elements in the Ruspy language
 /// Each variant corresponds to a specific type of token that can be recognized by the lexer
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub enum Token {
     // identifiers
     Identifier(String),
     Number(i64),
+    FloatLiteral(f64),
 
     // operators
     Plus,
@@ -41,6 +43,22 @@ pub enum Token {
 
     // Add print keyword
     Print,
+
+    // Control flow
+    If,
+    Else,
+    LBrace,
+    RBrace,
+    Comma,
+    Dot,
+
+    // Comparisons
+    Eq,      // ==
+    NotEq,   // !=
+    Gt,      // >
+    Lt,      // <
+    GtEq,    // >=
+    LtEq,    // <=
 
     // Add string literals
     StringLiteral(String),
@@ -103,7 +121,7 @@ impl<'a> Lexer<'a> {
             }
 
             // Handle different character types
-            if c.is_alphabetic() {
+            if c.is_alphabetic() || c == '_' {
                 return self.identifier();
             }
 
@@ -152,9 +170,53 @@ impl<'a> Lexer<'a> {
                     self.advance();
                     return Token::RParen;
                 }
+                '{' => {
+                    self.advance();
+                    return Token::LBrace;
+                }
+                '}' => {
+                    self.advance();
+                    return Token::RBrace;
+                }
+                ',' => {
+                    self.advance();
+                    return Token::Comma;
+                }
+                '.' => {
+                    self.advance();
+                    return Token::Dot;
+                }
                 '=' => {
                     self.advance();
+                    if let Some('=') = self.current_char {
+                        self.advance();
+                        return Token::Eq;
+                    }
                     return Token::Assign;
+                }
+                '!' => {
+                    self.advance();
+                    if let Some('=') = self.current_char {
+                        self.advance();
+                        return Token::NotEq;
+                    }
+                    panic!("Unexpected character: !");
+                }
+                '>' => {
+                    self.advance();
+                    if let Some('=') = self.current_char {
+                        self.advance();
+                        return Token::GtEq;
+                    }
+                    return Token::Gt;
+                }
+                '<' => {
+                    self.advance();
+                    if let Some('=') = self.current_char {
+                        self.advance();
+                        return Token::LtEq;
+                    }
+                    return Token::Lt;
                 }
                 ';' => {
                     self.advance();
@@ -179,9 +241,9 @@ impl<'a> Lexer<'a> {
     /// * Either a keyword Token or an Identifier Token containing the lexeme
     fn identifier(&mut self) -> Token {
         let mut result = String::new();
-        // Collect all alphanumeric characters
+        // Collect all alphanumeric characters and underscores
         while let Some(c) = self.current_char {
-            if c.is_alphanumeric() {
+            if c.is_alphanumeric() || c == '_' {
                 result.push(c);
                 self.advance();
             } else {
@@ -203,6 +265,8 @@ impl<'a> Lexer<'a> {
             "str32" => Token::TypeStr32,
             "str64" => Token::TypeStr64,
             "print" => Token::Print,
+            "if" => Token::If,
+            "else" => Token::Else,
             _ => Token::Identifier(result),
         }
     }
@@ -225,6 +289,35 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
+
+        // Check for decimal point
+        if let Some('.') = self.current_char {
+            // Need to peek ahead to ensure next char is a digit, otherwise it might be method call or property
+            // Actually, for simplicity, if we see dot and then digit, it's a float.
+            // But we don't have peek function easily here without cloning.
+            // Let's rely on immediate lookahead if feasible or just consume if digit follows.
+            
+            // We can check chars iterator clone
+            let mut next_chars = self.input.clone();
+            if let Some(next_c) = next_chars.next() {
+                if next_c.is_digit(10) {
+                    // It is a float!
+                    result.push('.');
+                    self.advance(); // consume '.'
+                    
+                    while let Some(c) = self.current_char {
+                        if c.is_digit(10) {
+                            result.push(c);
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                    return Token::FloatLiteral(result.parse::<f64>().unwrap());
+                }
+            }
+        }
+
         Token::Number(result.parse::<i64>().unwrap())
     }
 
