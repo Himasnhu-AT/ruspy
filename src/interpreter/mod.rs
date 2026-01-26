@@ -40,7 +40,7 @@ impl Interpreter {
         self.variables.insert(name, value);
     }
 
-    pub fn interpret(&mut self, nodes: Vec<ASTNode>, host: &mut dyn RuspyHost) -> Result<RuspyType, String> {
+    pub fn interpret(&mut self, nodes: &Vec<ASTNode>, host: &mut dyn RuspyHost) -> Result<RuspyType, String> {
         let mut last_result = Ok(RuspyType::Void);
         for node in nodes {
             match self.interpret_node(node, host) {
@@ -51,33 +51,33 @@ impl Interpreter {
         last_result
     }
 
-    fn interpret_node(&mut self, node: ASTNode, host: &mut dyn RuspyHost) -> Result<RuspyType, String> {
+    fn interpret_node(&mut self, node: &ASTNode, host: &mut dyn RuspyHost) -> Result<RuspyType, String> {
         match node {
-            ASTNode::Number(value) => Ok(RuspyType::Int64(value)),
-            ASTNode::FloatLiteral(value) => Ok(RuspyType::Float64(value)),
-            ASTNode::StringLiteral(value) => Ok(RuspyType::Str(value)),
+            ASTNode::Number(value) => Ok(RuspyType::Int64(*value)),
+            ASTNode::FloatLiteral(value) => Ok(RuspyType::Float64(*value)),
+            ASTNode::StringLiteral(value) => Ok(RuspyType::Str(value.clone())),
             ASTNode::Identifier(name) => {
-                let value = self.variables.get(&name).cloned();
+                let value = self.variables.get(name).cloned();
                 value.ok_or_else(|| format!("Undefined variable: {}", name))
             },
             ASTNode::VarAssign(name, expr) => {
-                let value = self.interpret_node(*expr, host)?;
-                self.variables.insert(name, value.clone());
+                let value = self.interpret_node(expr, host)?;
+                self.variables.insert(name.clone(), value.clone());
                 Ok(value)
             },
             ASTNode::TypedVarAssign(name, _declared_type, expr) => {
-                let value = self.interpret_node(*expr, host)?;
+                let value = self.interpret_node(expr, host)?;
                 // Type check could be improved
-                self.variables.insert(name, value.clone());
+                self.variables.insert(name.clone(), value.clone());
                 Ok(value)
             },
             ASTNode::BinaryOp(left, op, right) => {
-                let left_val = self.interpret_node(*left, host)?;
-                let right_val = self.interpret_node(*right, host)?;
-                self.evaluate_binary_op(left_val, op, right_val)
+                let left_val = self.interpret_node(left, host)?;
+                let right_val = self.interpret_node(right, host)?;
+                self.evaluate_binary_op(left_val, op.clone(), right_val)
             },
             ASTNode::Print(expr) => {
-                let value = self.interpret_node(*expr, host)?;
+                let value = self.interpret_node(expr, host)?;
                 info!("Output: {}", self.format_value(&value));
                 Ok(value)
             },
@@ -89,12 +89,12 @@ impl Interpreter {
                 Ok(result)
             },
             ASTNode::If(cond, then_branch, else_branch) => {
-                let cond_val = self.interpret_node(*cond, host)?;
+                let cond_val = self.interpret_node(cond, host)?;
                 match cond_val {
-                    RuspyType::Bool(true) => self.interpret_node(*then_branch, host),
+                    RuspyType::Bool(true) => self.interpret_node(then_branch, host),
                     RuspyType::Bool(false) => {
                         if let Some(else_branch) = else_branch {
-                            self.interpret_node(*else_branch, host)
+                            self.interpret_node(else_branch, host)
                         } else {
                             Ok(RuspyType::Void)
                         }
@@ -107,12 +107,12 @@ impl Interpreter {
                 for arg in args {
                     evaluated_args.push(self.interpret_node(arg, host)?);
                 }
-                host.call_function(&name, evaluated_args)
+                host.call_function(name, evaluated_args)
             },
             ASTNode::MemberAccess(obj_expr, member) => {
-                let obj_val = self.interpret_node(*obj_expr, host)?;
+                let obj_val = self.interpret_node(obj_expr, host)?;
                 match obj_val {
-                    RuspyType::Object(id) => host.get_member(&id, &member),
+                    RuspyType::Object(id) => host.get_member(&id, member),
                     _ => Err("Cannot access member of non-object type".to_string()),
                 }
             },

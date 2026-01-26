@@ -72,7 +72,7 @@ fn main() -> Result<(), String> {
     // Create interpreter and execute the code
     let mut interpreter = Interpreter::new();
     let mut host = interpreter::DefaultHost;
-    match interpreter.interpret(ast, &mut host) {
+    match interpreter.interpret(&ast, &mut host) {
         Ok(result) => {
             info!("Execution completed successfully");
             info!("Final result: {:?}", result);
