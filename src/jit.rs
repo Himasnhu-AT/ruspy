@@ -606,6 +606,7 @@ impl<'a, 'b, M: Module> Lowerer<'a, 'b, M> {
             ExprKind::Call(name, args) => self.lower_call(name, args),
             ExprKind::Range { .. } => bail("range is not a scalar value"),
             ExprKind::Str(_)
+            | ExprKind::Null
             | ExprKind::Array(_)
             | ExprKind::Index(_, _)
             | ExprKind::Member(_, _)
