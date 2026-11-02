@@ -10,6 +10,7 @@ pub mod parser;
 pub mod interpreter;
 pub mod value;
 pub mod ty;
+pub mod embed;
 
 #[cfg(feature = "jit")]
 pub mod jit;
