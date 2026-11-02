@@ -65,6 +65,7 @@ pub struct Interpreter {
     output: Vec<String>,
     steps: u64,
     depth: usize,
+    max_steps: u64,
 }
 
 impl Default for Interpreter {
@@ -82,7 +83,13 @@ impl Interpreter {
             output: Vec::new(),
             steps: 0,
             depth: 0,
+            max_steps: MAX_STEPS,
         }
+    }
+
+    /// Per-call step budget (default 20M).
+    pub fn set_max_steps(&mut self, n: u64) {
+        self.max_steps = n;
     }
 
     /// Inject a global variable from the host (e.g. a strategy's `tick`).
@@ -154,7 +161,7 @@ impl Interpreter {
 
     fn tick(&mut self, span: Span) -> Result<(), Diag> {
         self.steps += 1;
-        if self.steps > MAX_STEPS {
+        if self.steps > self.max_steps {
             return Err(Diag::error(span, "E0307", "execution budget exceeded")
                 .with_help("a loop or recursion may not terminate"));
         }

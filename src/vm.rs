@@ -325,11 +325,30 @@ pub struct Vm<'a> {
     output: Vec<String>,
     steps: u64,
     depth: usize,
+    max_steps: u64,
 }
 
 impl<'a> Vm<'a> {
     fn new(bc: &'a Bytecode) -> Self {
-        Vm { bc, globals: HashMap::new(), output: Vec::new(), steps: 0, depth: 0 }
+        Vm { bc, globals: HashMap::new(), output: Vec::new(), steps: 0, depth: 0, max_steps: MAX_STEPS }
+    }
+
+    pub fn set_max_steps(&mut self, n: u64) {
+        self.max_steps = n;
+    }
+
+    pub fn has_fn(&self, name: &str) -> bool {
+        self.bc.funcs.contains_key(name)
+    }
+
+    /// Call a top-level function by name; globals persist between calls. Fresh step budget per call.
+    pub fn call_named(&mut self, name: &str, args: Vec<Value>, host: &mut dyn RuspyHost) -> Result<Value, Diag> {
+        self.steps = 0;
+        self.depth = 0;
+        if !self.bc.funcs.contains_key(name) {
+            return Err(Diag::error(Span::new(0, 0), "E0303", format!("no function `{name}` to call")));
+        }
+        self.call(name, args, Span::new(0, 0), host)
     }
 
     /// Construct a VM over a compiled program (public entry for the CLI/tools).
@@ -363,7 +382,7 @@ impl<'a> Vm<'a> {
 
         while ip < chunk.code.len() {
             self.steps += 1;
-            if self.steps > MAX_STEPS {
+            if self.steps > self.max_steps {
                 return Err(Diag::error(chunk.code[ip].1, "E0307", "execution budget exceeded"));
             }
             let (op, sp) = &chunk.code[ip];
