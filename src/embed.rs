@@ -47,8 +47,8 @@ pub struct Module(usize);
 
 enum Exec {
     Interp(Interpreter),
-    // Bytecode is leaked for the spike: Vm borrows it. Production: make Vm own an Rc<Bytecode>.
-    Vm(Vm<'static>),
+    // The module owns bytecode + globals; a short-lived Vm borrows them for each call.
+    Vm { bc: std::rc::Rc<Bytecode>, globals: HashMap<String, Value> },
 }
 struct ModuleData {
     name: String,
@@ -112,13 +112,12 @@ impl Engine {
                 Exec::Interp(i)
             }
             Backend::Vm => {
-                let bc: &'static Bytecode = Box::leak(Box::new(
-                    vm::compile(&prog).map_err(|u| vec![ScriptError { module: name.into(), line: 0, col: 0, code: "E0900", message: format!("VM unsupported: {}", u.0) }])?,
-                ));
-                let mut v = Vm::new_public(bc);
+                let bc = vm::compile(&prog).map_err(|u| vec![ScriptError { module: name.into(), line: 0, col: 0, code: "E0900", message: format!("VM unsupported: {}", u.0) }])?;
+                let mut v = Vm::new_public(&bc);
                 v.set_max_steps(self.step_limit);
                 v.run_public(&mut bridge).map_err(|d| vec![Self::err(&shell, &d)])?;
-                Exec::Vm(v)
+                let globals = v.take_globals();
+                Exec::Vm { bc: std::rc::Rc::new(bc), globals }
             }
         };
         self.modules.push(ModuleData { exec, ..shell });
@@ -128,7 +127,7 @@ impl Engine {
     pub fn has_fn(&self, m: Module, f: &str) -> bool {
         match &self.modules[m.0].exec {
             Exec::Interp(i) => i.has_fn(f),
-            Exec::Vm(v) => v.has_fn(f),
+            Exec::Vm { bc, .. } => Vm::new_public(bc).has_fn(f),
         }
     }
 
@@ -141,9 +140,13 @@ impl Engine {
                 i.set_max_steps(limit);
                 i.call_named(f, args, &mut bridge)
             }
-            Exec::Vm(v) => {
+            Exec::Vm { bc, globals } => {
+                let mut v = Vm::new_public(bc);
                 v.set_max_steps(limit);
-                v.call_named(f, args, &mut bridge)
+                v.set_globals(std::mem::take(globals));
+                let r = v.call_named(f, args, &mut bridge);
+                *globals = v.take_globals();
+                r
             }
         };
         r.map_err(|d| Self::err(md, &d))

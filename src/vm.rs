@@ -337,6 +337,14 @@ impl<'a> Vm<'a> {
         self.max_steps = n;
     }
 
+    /// Swap persistent globals in/out so a host can own them between calls (the Vm itself borrows the bytecode).
+    pub fn set_globals(&mut self, g: HashMap<String, Value>) {
+        self.globals = g;
+    }
+    pub fn take_globals(&mut self) -> HashMap<String, Value> {
+        std::mem::take(&mut self.globals)
+    }
+
     pub fn has_fn(&self, name: &str) -> bool {
         self.bc.funcs.contains_key(name)
     }
