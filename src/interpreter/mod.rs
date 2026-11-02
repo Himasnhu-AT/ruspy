@@ -342,6 +342,7 @@ impl Interpreter {
             ExprKind::Float(v) => Ok(Value::Float(*v)),
             ExprKind::Str(s) => Ok(Value::Str(s.clone())),
             ExprKind::Bool(b) => Ok(Value::Bool(*b)),
+            ExprKind::Null => Ok(Value::Null),
             ExprKind::Ident(n) => self.lookup(n).cloned().ok_or_else(|| undefined(n, span)),
             ExprKind::Unary(UnOp::Neg, e) => {
                 let v = self.eval(e, host)?;

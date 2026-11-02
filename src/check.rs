@@ -233,6 +233,7 @@ impl Checker {
             ExprKind::Int(_) => Ty::Int(IntWidth::Default),
             ExprKind::Float(_) => Ty::Float(FloatWidth::Default),
             ExprKind::Bool(_) => Ty::Bool,
+            ExprKind::Null => Ty::Dynamic,
             ExprKind::Str(_) => Ty::Str,
             ExprKind::Ident(n) => match self.lookup(n) {
                 Some(t) => t,
@@ -371,6 +372,11 @@ impl Checker {
                 }
             }
             Add if matches!(lt, Ty::Str) && matches!(rt, Ty::Str) => Ty::Str,
+            Add if (matches!(lt, Ty::Str) && (rt.is_numeric() || matches!(rt, Ty::Bool | Ty::Char)))
+                || (matches!(rt, Ty::Str) && (lt.is_numeric() || matches!(lt, Ty::Bool | Ty::Char))) =>
+            {
+                Ty::Str
+            }
             Add | Sub | Mul | Div | Rem => match lt.arith_result(rt) {
                 Some(t) => t,
                 None => {

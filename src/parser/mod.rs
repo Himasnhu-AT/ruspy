@@ -16,7 +16,16 @@ pub struct Parser {
     pos: usize,
     /// Declared struct names, pre-scanned so `Name { .. }` disambiguates from a block.
     struct_names: std::collections::HashSet<String>,
+    /// Current expression/statement nesting, and binary operators seen in the current
+    /// top-level expression (left-nested chains are as deep as they are long).
+    depth: usize,
+    ops: usize,
 }
+
+/// Max nesting of parens/blocks/unary operators before a diagnostic (stack safety).
+const MAX_DEPTH: usize = 64;
+/// Max binary operators in one expression (a chain `a+b+c+..` becomes a deep tree).
+const MAX_OPS: usize = 200;
 
 type PResult<T> = Result<T, Diag>;
 
@@ -32,7 +41,7 @@ impl Parser {
                 }
             }
         }
-        Parser { tokens, pos: 0, struct_names }
+        Parser { tokens, pos: 0, struct_names, depth: 0, ops: 0 }
     }
 
     // ── cursor ──────────────────────────────────────────────────────────────
@@ -115,7 +124,22 @@ impl Parser {
     }
 
     // ── statements ──────────────────────────────────────────────────────────
+    fn enter(&mut self) -> PResult<()> {
+        if self.depth >= MAX_DEPTH {
+            return Err(Diag::error(self.cur_span(), "E0109", format!("nesting is too deep (limit {MAX_DEPTH})")));
+        }
+        self.depth += 1;
+        Ok(())
+    }
+
     fn statement(&mut self) -> PResult<Stmt> {
+        self.enter()?;
+        let r = self.statement_inner();
+        self.depth -= 1;
+        r
+    }
+
+    fn statement_inner(&mut self) -> PResult<Stmt> {
         match self.cur() {
             Token::Import => self.import_stmt(),
             Token::Print => self.print_stmt(),
@@ -372,7 +396,21 @@ impl Parser {
 
     // ── expressions (precedence climbing) ────────────────────────────────────
     fn expression(&mut self) -> PResult<Expr> {
-        self.range_expr()
+        self.enter()?;
+        if self.depth == 1 {
+            self.ops = 0;
+        }
+        let r = self.range_expr();
+        self.depth -= 1;
+        r
+    }
+
+    fn count_op(&mut self) -> PResult<()> {
+        self.ops += 1;
+        if self.ops > MAX_OPS {
+            return Err(Diag::error(self.cur_span(), "E0109", format!("expression is too long (limit {MAX_OPS} operators)")));
+        }
+        Ok(())
     }
 
     /// Ranges bind loosest so `for i in 0..n` and `a..b` read naturally.
@@ -393,6 +431,7 @@ impl Parser {
         let mut lhs = self.and_expr()?;
         while matches!(self.cur(), Token::PipePipe) {
             self.bump();
+            self.count_op()?;
             let rhs = self.and_expr()?;
             let span = lhs.span.to(rhs.span);
             lhs = Spanned::new(ExprKind::Logic(LogicOp::Or, Box::new(lhs), Box::new(rhs)), span);
@@ -404,6 +443,7 @@ impl Parser {
         let mut lhs = self.comparison()?;
         while matches!(self.cur(), Token::AmpAmp) {
             self.bump();
+            self.count_op()?;
             let rhs = self.comparison()?;
             let span = lhs.span.to(rhs.span);
             lhs = Spanned::new(ExprKind::Logic(LogicOp::And, Box::new(lhs), Box::new(rhs)), span);
@@ -432,6 +472,7 @@ impl Parser {
         let mut lhs = self.multiplicative()?;
         while let Some(op) = add_op(self.cur()) {
             self.bump();
+            self.count_op()?;
             let rhs = self.multiplicative()?;
             let span = lhs.span.to(rhs.span);
             lhs = Spanned::new(ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)), span);
@@ -443,6 +484,7 @@ impl Parser {
         let mut lhs = self.unary()?;
         while let Some(op) = mul_op(self.cur()) {
             self.bump();
+            self.count_op()?;
             let rhs = self.unary()?;
             let span = lhs.span.to(rhs.span);
             lhs = Spanned::new(ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)), span);
@@ -451,6 +493,17 @@ impl Parser {
     }
 
     fn unary(&mut self) -> PResult<Expr> {
+        // Only the operator forms recurse; a plain operand goes straight to `postfix`.
+        if !matches!(self.cur(), Token::Minus | Token::Bang) {
+            return self.postfix();
+        }
+        self.enter()?;
+        let r = self.unary_inner();
+        self.depth -= 1;
+        r
+    }
+
+    fn unary_inner(&mut self) -> PResult<Expr> {
         match self.cur() {
             Token::Minus => {
                 let start = self.bump().span;
@@ -559,6 +612,10 @@ impl Parser {
             Token::StringLiteral(s) => {
                 self.bump();
                 Ok(Spanned::new(ExprKind::Str(s), sp))
+            }
+            Token::Null => {
+                self.bump();
+                Ok(Spanned::new(ExprKind::Null, sp))
             }
             Token::True => {
                 self.bump();

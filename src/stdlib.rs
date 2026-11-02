@@ -16,7 +16,7 @@ pub fn is_builtin(name: &str) -> bool {
         name,
         "abs" | "sqrt" | "pow" | "floor" | "ceil" | "round" | "min" | "max" | "ln" | "exp"
             | "is_nan" | "is_finite" | "nan" | "sma" | "ema" | "wma" | "rsi" | "stdev" | "mean"
-            | "sum" | "highest" | "lowest" | "len"
+            | "sum" | "highest" | "lowest" | "len" | "tostr" | "is_null"
     )
 }
 
@@ -62,6 +62,14 @@ fn dispatch(name: &str, args: &[Value], span: Span) -> Result<Value, Diag> {
         "max" => {
             arity(name, args, 2, span)?;
             Ok(pick(&args[0], &args[1], name, span, false)?)
+        }
+        "tostr" => {
+            arity(name, args, 1, span)?;
+            Ok(Value::Str(args[0].to_string()))
+        }
+        "is_null" => {
+            arity(name, args, 1, span)?;
+            Ok(Value::Bool(matches!(args[0], Value::Null)))
         }
         "len" => {
             arity(name, args, 1, span)?;

@@ -250,6 +250,10 @@ impl Compiler {
                 let k = ch.konst(Value::Bool(*b));
                 ch.emit(Op::Const(k), sp);
             }
+            ExprKind::Null => {
+                let k = ch.konst(Value::Null);
+                ch.emit(Op::Const(k), sp);
+            }
             ExprKind::Str(s) => {
                 let k = ch.konst(Value::Str(s.clone()));
                 ch.emit(Op::Const(k), sp);
@@ -817,6 +821,7 @@ pub mod protect {
                 w.u32(*c as u32);
             }
             Value::Void => w.u8(5),
+            Value::Null => w.u8(6),
             _ => return err("non-serializable constant (array/struct) in bytecode"),
         }
         Ok(())
@@ -831,6 +836,7 @@ pub mod protect {
                 char::from_u32(r.u32()?).ok_or_else(|| ProtectError("bad char".into()))?,
             ),
             5 => Value::Void,
+            6 => Value::Null,
             _ => return err("bad value tag"),
         })
     }

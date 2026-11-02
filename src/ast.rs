@@ -18,6 +18,8 @@ pub enum ExprKind {
     Float(f64),
     Str(String),
     Bool(bool),
+    /// The `null` literal.
+    Null,
     /// A variable reference.
     Ident(String),
     /// Unary `-x` / `!x`.

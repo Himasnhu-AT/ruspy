@@ -236,4 +236,67 @@ fn on_overlap(other) {
         println!("load: {:?}", m.as_ref().err());
         if let Ok(m) = m { println!("{}", e.call(m, "f", vec![], &mut w).unwrap_err()); }
     }
+
+    fn run_ret(src: &str, call: &str) -> Value {
+        for b in [Backend::Interpreter, Backend::Vm] {
+            let mut e = Engine::new(b);
+            let mut w = World::new();
+            let m = e.load("t.ruspy", src, &mut w).unwrap_or_else(|er| panic!("{er:?}"));
+            let v = e.call(m, call, vec![], &mut w).unwrap_or_else(|er| panic!("{er}"));
+            if b == Backend::Vm {
+                return v;
+            }
+        }
+        unreachable!()
+    }
+
+    #[test]
+    fn deep_nesting_is_a_diagnostic_not_a_crash() {
+        let mut e = Engine::new(Backend::Interpreter);
+        let mut w = World::new();
+        for src in [
+            format!("fn f() {{ x = {}1{}; }}", "(".repeat(1000), ")".repeat(1000)),
+            format!("fn f() {{ x = {}1; }}", "-".repeat(5000)),
+            format!("fn f() {{ {} {} }}", "if true {".repeat(1000), "}".repeat(1000)),
+            format!("fn f() {{ x = 1{}; }}", "+1".repeat(5000)),
+        ] {
+            let errs = e.load("deep.ruspy", &src, &mut w).unwrap_err();
+            assert!(errs.iter().any(|x| x.code == "E0109"), "{:?}", errs.first());
+        }
+        // Moderate nesting still works.
+        let ok = format!("fn f() {{ return {}1{}; }}", "(".repeat(30), ")".repeat(30));
+        assert!(e.load("ok.ruspy", &ok, &mut w).is_ok());
+    }
+
+    #[test]
+    fn tostr_and_string_concat() {
+        let src = r#"
+fn a() { return "n=" + 3; }
+fn b() { return 2.5 + "x"; }
+fn c() { return "ok " + true; }
+fn d() { return "v" + tostr(7) + tostr(1.5); }
+"#;
+        assert_eq!(run_ret(src, "a"), Value::Str("n=3".into()));
+        assert_eq!(run_ret(src, "b"), Value::Str("2.5x".into()));
+        assert_eq!(run_ret(src, "c"), Value::Str("ok true".into()));
+        assert_eq!(run_ret(src, "d"), Value::Str("v71.5".into()));
+    }
+
+    #[test]
+    fn null_and_is_null() {
+        let src = r#"
+fn n() { return null; }
+fn t() { x = null; return is_null(x); }
+fn f() { return is_null(3); }
+fn eq() { x = null; return x == null; }
+fn ne() { return 1 == null; }
+fn show() { return "got " + tostr(null); }
+"#;
+        assert_eq!(run_ret(src, "n"), Value::Null);
+        assert_eq!(run_ret(src, "t"), Value::Bool(true));
+        assert_eq!(run_ret(src, "f"), Value::Bool(false));
+        assert_eq!(run_ret(src, "eq"), Value::Bool(true));
+        assert_eq!(run_ret(src, "ne"), Value::Bool(false));
+        assert_eq!(run_ret(src, "show"), Value::Str("got null".into()));
+    }
 }

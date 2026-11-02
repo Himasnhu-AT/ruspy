@@ -29,6 +29,8 @@ pub enum Value {
     /// A record instance: the struct's name + its named fields (reference semantics).
     Struct(String, Rc<RefCell<std::collections::HashMap<String, Value>>>),
     Void,
+    /// The absent value (`null`): "no entity", a missing result.
+    Null,
 }
 
 impl Value {
@@ -70,6 +72,7 @@ impl Value {
             Value::Array(_) => "array",
             Value::Struct(_, _) => "struct",
             Value::Void => "void",
+            Value::Null => "null",
         }
     }
 
@@ -123,6 +126,19 @@ pub fn binop(op: BinOp, l: &Value, r: &Value, span: Span) -> Result<Value, Diag>
             Ge => Ok(Value::Bool(a >= b)),
             _ => Err(type_err(op, l, r, span)),
         };
+    }
+
+    // `str + scalar` / `scalar + str` concatenates (the scalar prints as `tostr` would).
+    if op == Add {
+        match (l, r) {
+            (Value::Str(a), b @ (Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::Char(_))) => {
+                return Ok(Value::Str(format!("{a}{b}")))
+            }
+            (a @ (Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::Char(_)), Value::Str(b)) => {
+                return Ok(Value::Str(format!("{a}{b}")))
+            }
+            _ => {}
+        }
     }
 
     // Numeric path.
@@ -190,6 +206,7 @@ fn values_equal(l: &Value, r: &Value) -> bool {
         (Value::Array(a), Value::Array(b)) => *a.borrow() == *b.borrow(),
         (Value::Struct(na, a), Value::Struct(nb, b)) => na == nb && *a.borrow() == *b.borrow(),
         (Value::Void, Value::Void) => true,
+        (Value::Null, Value::Null) => true,
         _ => match (l.as_f64(), r.as_f64()) {
             (Some(a), Some(b)) => a == b,
             _ => false,
@@ -257,6 +274,7 @@ impl fmt::Display for Value {
                 write!(f, " }}")
             }
             Value::Void => write!(f, "void"),
+            Value::Null => write!(f, "null"),
         }
     }
 }
