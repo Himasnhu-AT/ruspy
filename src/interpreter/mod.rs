@@ -9,6 +9,8 @@
 use crate::ast::{Expr, ExprKind, LogicOp, Program, Stmt, StmtKind, UnOp};
 use crate::diagnostics::{Diag, Span};
 use crate::value::{self, DictKey, Value};
+
+pub mod coroutine;
 use std::collections::HashMap;
 
 /// Max nested call depth before a diagnostic (prevents native stack overflow).
@@ -70,7 +72,13 @@ impl RuspyHost for DefaultHost {
 #[derive(Clone)]
 struct FnDef {
     params: Vec<String>,
-    body: Vec<Stmt>,
+    body: std::rc::Rc<Vec<Stmt>>,
+    /// The body contains `await`: calling it starts a coroutine.
+    coroutine: bool,
+}
+
+fn fn_def(params: &[crate::ast::Param], body: &[Stmt]) -> FnDef {
+    FnDef { params: params.iter().map(|p| p.name.clone()).collect(), body: std::rc::Rc::new(body.to_vec()), coroutine: coroutine::contains_await(body) }
 }
 
 /// Non-local control flow threaded through statement execution.
@@ -88,6 +96,10 @@ pub struct Interpreter {
     /// Declared struct name → its field names (for literal validation).
     structs: HashMap<String, Vec<String>>,
     output: Vec<String>,
+    /// Suspended coroutines by token, and suspensions not yet collected by the host.
+    coroutines: HashMap<u64, coroutine::Coroutine>,
+    next_co: u64,
+    suspended: Vec<(u64, Value)>,
     steps: u64,
     depth: usize,
     max_steps: u64,
@@ -106,6 +118,9 @@ impl Interpreter {
             funcs: HashMap::new(),
             structs: HashMap::new(),
             output: Vec::new(),
+            coroutines: HashMap::new(),
+            next_co: 1,
+            suspended: Vec::new(),
             steps: 0,
             depth: 0,
             max_steps: MAX_STEPS,
@@ -148,6 +163,42 @@ impl Interpreter {
         self.funcs.contains_key(name)
     }
 
+    /// Does calling `name` start a coroutine (its body contains `await`)?
+    pub fn is_coroutine(&self, name: &str) -> bool {
+        self.funcs.get(name).is_some_and(|f| f.coroutine)
+    }
+
+    /// Coroutines that suspended since the last call: `(token, awaited value)`. Calling a
+    /// coroutine function runs it to its first `await` and returns `void`; the host resumes it
+    /// later with [`Interpreter::resume`].
+    pub fn take_suspended(&mut self) -> Vec<(u64, Value)> {
+        std::mem::take(&mut self.suspended)
+    }
+
+    /// Resumes a suspended coroutine; `value` is what its `await` evaluates to. `Suspended`
+    /// keeps the same token; `Done` frees the coroutine (also on error).
+    pub fn resume(&mut self, token: u64, value: Value, host: &mut dyn RuspyHost) -> Result<coroutine::Outcome, Diag> {
+        let Some(mut co) = self.coroutines.remove(&token) else {
+            return Err(Diag::error(Span::new(0, 0), "E0362", format!("no suspended coroutine {token}")));
+        };
+        self.steps = 0;
+        self.depth = 0;
+        let out = self.co_run(&mut co, Some(value), host)?;
+        if let coroutine::Outcome::Suspended(_) = &out {
+            self.coroutines.insert(token, co);
+        }
+        Ok(out)
+    }
+
+    /// Drops a suspended coroutine without running it (its owner went away).
+    pub fn drop_coroutine(&mut self, token: u64) {
+        self.coroutines.remove(&token);
+    }
+
+    pub fn coroutine_count(&self) -> usize {
+        self.coroutines.len()
+    }
+
     /// Call a top-level function by name with already-evaluated arguments — the entry
     /// point a host uses to drive a strategy lifecycle (`on_tick` once per market tick).
     ///
@@ -175,7 +226,7 @@ impl Interpreter {
         for stmt in prog {
             match &stmt.node {
                 StmtKind::Fn { name, params, body, .. } => {
-                    self.funcs.insert(name.clone(), FnDef { params: params.iter().map(|p| p.name.clone()).collect(), body: body.clone() });
+                    self.funcs.insert(name.clone(), fn_def(params, body));
                 }
                 StmtKind::Struct { name, fields } => {
                     self.structs.insert(name.clone(), fields.clone());
@@ -211,7 +262,7 @@ impl Interpreter {
             StmtKind::Import { .. } => Ok(Flow::Normal),
             StmtKind::Fn { name, params, body, .. } => {
                 // nested definitions register globally too
-                self.funcs.insert(name.clone(), FnDef { params: params.iter().map(|p| p.name.clone()).collect(), body: body.clone() });
+                self.funcs.insert(name.clone(), fn_def(params, body));
                 Ok(Flow::Normal)
             }
             StmtKind::Var { name, value, .. } => {
@@ -553,6 +604,8 @@ impl Interpreter {
                 }
                 Ok(Value::array(vals))
             }
+            ExprKind::Await(_) => Err(Diag::error(span, "E0361", "`await` only works inside a function body run as a coroutine")
+                .with_help("use `await e;` / `x = await e;` as a statement in a function")),
             ExprKind::Dict(pairs) => {
                 let mut d = value::Dict::default();
                 for (k, v) in pairs {
@@ -638,11 +691,24 @@ impl Interpreter {
             return Err(Diag::error(span, "E0312", "maximum call depth exceeded")
                 .with_help("this recursion may not terminate"));
         }
-        self.depth += 1;
         let mut frame = HashMap::new();
-        for (p, a) in func.params.iter().zip(args) {
-            frame.insert(p.clone(), a);
+        for (p, a) in func.params.iter().zip(&args) {
+            frame.insert(p.clone(), a.clone());
         }
+        if func.coroutine {
+            let mut co = coroutine::Coroutine::new(func.body.clone(), frame);
+            return match self.co_run(&mut co, None, host)? {
+                coroutine::Outcome::Done(v) => Ok(v),
+                coroutine::Outcome::Suspended(a) => {
+                    let token = self.next_co;
+                    self.next_co += 1;
+                    self.coroutines.insert(token, co);
+                    self.suspended.push((token, a));
+                    Ok(Value::Void)
+                }
+            };
+        }
+        self.depth += 1;
         self.frames.push(frame);
         let flow = self.exec_block(&func.body, host);
         self.frames.pop();

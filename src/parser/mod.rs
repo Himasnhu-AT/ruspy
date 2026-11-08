@@ -594,6 +594,29 @@ impl Parser {
     }
 
     fn unary(&mut self) -> PResult<Expr> {
+        // Contextual keyword: `await <expr>` (a name `await` followed by something that starts an expression).
+        if matches!(self.cur(), Token::Identifier(n) if n == "await")
+            && matches!(
+                self.peek(1),
+                Token::Identifier(_)
+                    | Token::StringLiteral(_)
+                    | Token::Number(_)
+                    | Token::FloatLiteral(_)
+                    | Token::LParen
+                    | Token::LBracket
+                    | Token::True
+                    | Token::False
+                    | Token::Null
+            )
+        {
+            let start = self.bump().span;
+            self.enter()?;
+            let e = self.unary();
+            self.depth -= 1;
+            let e = e?;
+            let span = start.to(e.span);
+            return Ok(Spanned::new(ExprKind::Await(Box::new(e)), span));
+        }
         // Only the operator forms recurse; a plain operand goes straight to `postfix`.
         if !matches!(self.cur(), Token::Minus | Token::Bang) {
             return self.postfix();

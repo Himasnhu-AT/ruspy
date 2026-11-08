@@ -38,6 +38,8 @@ pub enum ExprKind {
     Array(Vec<Expr>),
     /// A dictionary literal `{"a": 1, "b": [2, 3]}`.
     Dict(Vec<(Expr, Expr)>),
+    /// `await expr` — suspends a coroutine (statement level only: `await e;`, `x = await e;`).
+    Await(Box<Expr>),
     /// Indexing `arr[i]` / `dict[key]`.
     Index(Box<Expr>, Box<Expr>),
     /// A method call `recv.name(args...)` (array builtins today, host later).

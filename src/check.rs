@@ -113,7 +113,7 @@ impl Checker {
             StmtKind::Import { .. } => {}
             StmtKind::Fn { params, ret, body, .. } => self.check_fn(params, ret, body),
             StmtKind::Var { name, ty, value } => {
-                let vt = self.synth(value);
+                let vt = self.synth_top(value);
                 if let Some(ann) = ty {
                     if !vt.assignable_to(ann) {
                         self.error(value.span, "E0400", format!("cannot assign `{vt}` to `{name}: {ann}`"));
@@ -124,7 +124,7 @@ impl Checker {
                 }
             }
             StmtKind::Assign { name, name_span, op, value } => {
-                let vt = self.synth(value);
+                let vt = self.synth_top(value);
                 match self.lookup(name) {
                     Some(existing) => {
                         // compound assign must produce a compatible arithmetic result
@@ -159,8 +159,11 @@ impl Checker {
                 self.synth(value);
             }
             StmtKind::Struct { .. } => {} // struct fields are gradually typed (Dynamic)
-            StmtKind::Print(e) | StmtKind::Expr(e) => {
+            StmtKind::Print(e) => {
                 self.synth(e);
+            }
+            StmtKind::Expr(e) => {
+                self.synth_top(e);
             }
             StmtKind::Block(body) => self.check_scope(body),
             StmtKind::If { cond, then, els } => {
@@ -197,7 +200,7 @@ impl Checker {
                 self.scopes.pop();
             }
             StmtKind::Return(e) => {
-                let rt = e.as_ref().map(|x| self.synth(x)).unwrap_or(Ty::Void);
+                let rt = e.as_ref().map(|x| self.synth_top(x)).unwrap_or(Ty::Void);
                 if let Some(expected) = self.current_ret.clone() {
                     if !rt.assignable_to(&expected) {
                         let span = e.as_ref().map(|x| x.span).unwrap_or(stmt.span);
@@ -319,6 +322,15 @@ impl Checker {
                 }
                 Ty::Array(Box::new(elem))
             }
+            ExprKind::Await(inner) => {
+                self.synth(inner);
+                self.error(
+                    expr.span,
+                    "E0360",
+                    "`await` must be a whole statement: `await e;`, `x = await e;` or `return await e;`",
+                );
+                Ty::Dynamic
+            }
             ExprKind::Dict(pairs) => {
                 for (k, v) in pairs {
                     self.synth(k);
@@ -405,6 +417,18 @@ impl Checker {
                 }
             },
         }
+    }
+
+    /// A statement-level expression: `await e` is allowed here (and only here).
+    fn synth_top(&mut self, e: &Expr) -> Ty {
+        if let ExprKind::Await(inner) = &e.node {
+            if let ExprKind::Await(_) = &inner.node {
+                self.error(e.span, "E0360", "`await await` is not supported");
+            }
+            self.synth(inner);
+            return Ty::Dynamic;
+        }
+        self.synth(e)
     }
 
     fn expect_bool(&mut self, e: &Expr) {

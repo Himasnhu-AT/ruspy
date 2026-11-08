@@ -3,6 +3,7 @@
 
 use crate::diagnostics::{Diag, LineIndex};
 use crate::interpreter::{Interpreter, RuspyHost};
+pub use crate::interpreter::coroutine::Outcome;
 use crate::value::Value;
 use crate::vm::{self, Bytecode, Vm};
 use std::any::Any;
@@ -255,6 +256,55 @@ impl Engine {
         match &self.modules[m.0].exec {
             Exec::Interp(i) => i.has_fn(f),
             Exec::Vm { bc, .. } => Vm::new_public(bc).has_fn(f),
+        }
+    }
+
+    /// Does calling `f` start a coroutine (its body has `await`)? Interpreter modules only.
+    pub fn is_coroutine(&self, m: Module, f: &str) -> bool {
+        match &self.modules[m.0].exec {
+            Exec::Interp(i) => i.is_coroutine(f),
+            Exec::Vm { .. } => false,
+        }
+    }
+
+    /// Coroutines that suspended during `load`/`call`/`resume` since the last time: each
+    /// `(token, awaited value)`. A call that starts a coroutine returns `void` once it reaches
+    /// its first `await`; the host decides when to [`Engine::resume`] it.
+    pub fn take_suspended(&mut self, m: Module) -> Vec<(u64, Value)> {
+        match &mut self.modules[m.0].exec {
+            Exec::Interp(i) => i.take_suspended(),
+            Exec::Vm { .. } => vec![],
+        }
+    }
+
+    /// Resumes coroutine `token` (`value` is what its `await` evaluates to). Returns whether it
+    /// finished (`Done(return value)`) or suspended again (`Suspended(awaited)`, same token).
+    pub fn resume(&mut self, m: Module, token: u64, value: Value, state: &mut dyn Any) -> Result<Outcome, ScriptError> {
+        let limit = self.step_limit;
+        let md = &mut self.modules[m.0];
+        let mut bridge = Bridge { fns: &self.fns, hooks: &self.hooks, self_id: self.self_id, ctx: Ctx { state, fns: Some(&self.fns) } };
+        let r = match &mut md.exec {
+            Exec::Interp(i) => {
+                i.set_max_steps(limit);
+                i.resume(token, value, &mut bridge)
+            }
+            Exec::Vm { .. } => Err(Diag::error(crate::diagnostics::Span::new(0, 0), "E0362", "coroutines need the interpreter backend")),
+        };
+        r.map_err(|d| Self::err(md, &d))
+    }
+
+    /// Drops a suspended coroutine (its owner is gone).
+    pub fn drop_coroutine(&mut self, m: Module, token: u64) {
+        if let Exec::Interp(i) = &mut self.modules[m.0].exec {
+            i.drop_coroutine(token);
+        }
+    }
+
+    /// Number of suspended coroutines in module `m`.
+    pub fn coroutine_count(&self, m: Module) -> usize {
+        match &self.modules[m.0].exec {
+            Exec::Interp(i) => i.coroutine_count(),
+            Exec::Vm { .. } => 0,
         }
     }
 
@@ -590,6 +640,100 @@ fn me() { return self; }
         let m = e.load("v", src, &mut w).unwrap_or_else(|er| panic!("{er:?}"));
         assert_eq!(e.call(m, "f", vec![], &mut w).unwrap_err().code, "E0331"); // new object has no hp
         assert_eq!(e.call(m, "g", vec![], &mut w).unwrap(), Value::Int(4));
+    }
+
+    fn aw(v: &str) -> Value {
+        Value::Str(v.into())
+    }
+
+    #[test]
+    fn coroutines_suspend_resume_and_keep_locals() {
+        let src = r#"
+total = 0;
+log_line = "";
+fn run(n) {
+    i = 0;
+    while i < n {
+        got = await "tick";
+        total += got;
+        if got > 5 {
+            x = await "big";
+            log_line += x;
+            continue;
+        }
+        i += 1;
+    }
+    for k in [10, 20] {
+        await k;
+        if k == 10 { continue; }
+    }
+    match n { 2 => { y = await "m"; total += y; } _ => { } }
+    return total + 1000;
+}
+fn plain() { return 7; }
+"#;
+        let mut e = Engine::new(Backend::Interpreter);
+        let mut w = World::new();
+        let m = e.load("c", src, &mut w).unwrap_or_else(|er| panic!("{er:?}"));
+        assert!(e.is_coroutine(m, "run") && !e.is_coroutine(m, "plain"));
+        assert_eq!(e.call(m, "plain", vec![], &mut w).unwrap(), Value::Int(7));
+        assert!(e.take_suspended(m).is_empty());
+        assert_eq!(e.call(m, "run", vec![Value::Int(2)], &mut w).unwrap(), Value::Void);
+        let s = e.take_suspended(m);
+        assert_eq!(s, vec![(1, aw("tick"))]);
+        assert_eq!(e.coroutine_count(m), 1);
+        // tick(1), tick(9 -> big), tick(2), then the for loop (10, 20), then match
+        assert_eq!(e.resume(m, 1, Value::Int(1), &mut w).unwrap(), Outcome::Suspended(aw("tick")));
+        assert_eq!(e.resume(m, 1, Value::Int(9), &mut w).unwrap(), Outcome::Suspended(aw("big")));
+        assert_eq!(e.resume(m, 1, aw("!"), &mut w).unwrap(), Outcome::Suspended(aw("tick")));
+        assert_eq!(e.resume(m, 1, Value::Int(2), &mut w).unwrap(), Outcome::Suspended(Value::Int(10)));
+        assert_eq!(e.resume(m, 1, Value::Null, &mut w).unwrap(), Outcome::Suspended(Value::Int(20)));
+        assert_eq!(e.resume(m, 1, Value::Null, &mut w).unwrap(), Outcome::Suspended(aw("m")));
+        assert_eq!(e.resume(m, 1, Value::Int(100), &mut w).unwrap(), Outcome::Done(Value::Int(1112)));
+        assert_eq!(e.global(m, "log_line"), Some(aw("!")));
+        assert_eq!(e.coroutine_count(m), 0);
+        assert_eq!(e.resume(m, 1, Value::Null, &mut w).unwrap_err().code, "E0362");
+    }
+
+    #[test]
+    fn coroutines_are_independent_and_droppable_and_errors_are_located() {
+        let src = r#"n = 0;
+fn go(tag) { v = await tag; n += v; return n; }
+fn boom() {
+  await 1;
+  y = 1 / 0;
+}
+fn nested() { z = go("inner"); return z; }
+"#;
+        let mut e = Engine::new(Backend::Interpreter);
+        let mut w = World::new();
+        let m = e.load("c", src, &mut w).unwrap();
+        e.call(m, "go", vec![aw("a")], &mut w).unwrap();
+        e.call(m, "go", vec![aw("b")], &mut w).unwrap();
+        let toks: Vec<u64> = e.take_suspended(m).into_iter().map(|(t, _)| t).collect();
+        assert_eq!(toks.len(), 2);
+        e.drop_coroutine(m, toks[0]);
+        assert_eq!(e.resume(m, toks[1], Value::Int(5), &mut w).unwrap(), Outcome::Done(Value::Int(5)));
+        // A call from ordinary code starts a detached coroutine and yields void.
+        assert_eq!(e.call(m, "nested", vec![], &mut w).unwrap(), Value::Void);
+        assert_eq!(e.take_suspended(m).len(), 1);
+        e.call(m, "boom", vec![], &mut w).unwrap();
+        let t = e.take_suspended(m).pop().unwrap().0;
+        let err = e.resume(m, t, Value::Null, &mut w).unwrap_err();
+        assert_eq!((err.line, err.code), (5, "E0205"), "{err}");
+        assert_eq!(e.coroutine_count(m), 1, "only the detached `nested` one is left: dropped and failed ones are freed");
+    }
+
+    #[test]
+    fn await_must_be_a_statement_and_needs_the_interpreter() {
+        let mut w = World::new();
+        let mut e = Engine::new(Backend::Interpreter);
+        let errs = e.load("c", "fn f() { x = 1 + await 2; }", &mut w).unwrap_err();
+        assert_eq!(errs[0].code, "E0360");
+        let errs = e.load("c", "x = await 2;", &mut w).unwrap_err();
+        assert_eq!(errs[0].code, "E0361");
+        let errs = Engine::new(Backend::Vm).load("c", "fn f() { await 1; }", &mut w).unwrap_err();
+        assert_eq!(errs[0].code, "E0900");
     }
 
     #[test]

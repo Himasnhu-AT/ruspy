@@ -309,6 +309,7 @@ impl Compiler {
                 ch.emit(Op::GetMember(o, f), sp);
             }
             ExprKind::Dict(_) => return Err(Unsupported("dictionaries".into())),
+            ExprKind::Await(_) => return Err(Unsupported("await".into())),
             ExprKind::Array(_) | ExprKind::Index(_, _) | ExprKind::Method(_, _, _) => {
                 return Err(Unsupported("arrays".into()));
             }

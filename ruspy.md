@@ -112,3 +112,29 @@ match s {
 `match`, `const` and `enum` are contextual: still fine as variable names. `match` is a statement
 (no value). Arms compare with `==`. The VM does not compile `match`, dicts (so enums), strings
 methods or vectors' methods/assignments; the host falls back to the interpreter on `E0900`.
+
+## 9. coroutines (`await`)
+
+A function whose body contains `await` is a **coroutine**. Calling it runs until the first
+`await` and returns `void` (a coroutine that never awaits returns its value normally); the host
+resumes it later (`Engine::take_suspended`, `Engine::resume`, `Engine::drop_coroutine`; tokens
+identify coroutines, the awaited value tells the host what to wait for, the resume value is
+what `await` evaluates to).
+
+```
+fn countdown(n) {
+    while n > 0 {
+        await wait(1.0);          # host-defined awaitable (value is passed to the host)
+        n -= 1;
+    }
+    hit = await signal_of(target, "died");   # x = await e;  x: T = await e;  return await e;
+}
+```
+`await` must be a whole statement (`await e;`, `x = await e;`, `x: T = await e;`,
+`return await e;`) but can sit inside `if`, `while`, `for`, `match` and blocks, with
+`break`/`continue` working across it. Not supported: `await` inside a larger expression
+(`1 + await e`, argument lists), at top level, in `x.f = await e`; `await f()` where `f` is
+itself a coroutine does not wait for `f` (it starts detached and the outer resumes at once).
+Coroutines need the interpreter backend (the VM reports `E0900`). Locals survive suspension; a
+resumed coroutine gets a fresh step budget. Errors after a resume carry the located diagnostic and
+free the coroutine.
