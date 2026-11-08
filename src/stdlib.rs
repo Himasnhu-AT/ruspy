@@ -17,7 +17,7 @@ pub fn is_builtin(name: &str) -> bool {
         "abs" | "sqrt" | "pow" | "floor" | "ceil" | "round" | "min" | "max" | "ln" | "exp"
             | "is_nan" | "is_finite" | "nan" | "sma" | "ema" | "wma" | "rsi" | "stdev" | "mean"
             | "sum" | "highest" | "lowest" | "len" | "tostr" | "is_null" | "fmt" | "vec2" | "Vec2"
-            | "vec3" | "Vec3" | "color" | "Color"
+            | "vec3" | "Vec3" | "color" | "Color" | "int" | "float" | "str" | "bool" | "idiv"
     )
 }
 
@@ -65,6 +65,18 @@ fn dispatch(name: &str, args: &[Value], span: Span) -> Result<Value, Diag> {
             Ok(pick(&args[0], &args[1], name, span, false)?)
         }
         "fmt" => crate::methods::fmt(args, span),
+        "int" | "float" | "str" | "bool" => {
+            arity(name, args, 1, span)?;
+            cast(name, &args[0], span)
+        }
+        "idiv" => {
+            arity(name, args, 2, span)?;
+            let (a, b) = (num(&args[0], name, span)?, num(&args[1], name, span)?);
+            if b == 0.0 {
+                return Err(err(span, "`idiv` by zero".into()));
+            }
+            Ok(Value::Int((a / b).trunc() as i64))
+        }
         "vec2" | "Vec2" | "vec3" | "Vec3" | "color" | "Color" => crate::methods::construct(name, args, span),
         "tostr" => {
             arity(name, args, 1, span)?;
@@ -191,6 +203,39 @@ fn dispatch(name: &str, args: &[Value], span: Span) -> Result<Value, Diag> {
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
+/// `int(x)` truncates floats and parses strings (0 when unparsable); `float(x)`; `str(x)`;
+/// `bool(x)` is false for 0, 0.0, "", null, empty arrays/dicts.
+fn cast(name: &str, v: &Value, span: Span) -> Result<Value, Diag> {
+    Ok(match name {
+        "int" => match v {
+            Value::Int(_) => v.clone(),
+            Value::Float(f) => Value::Int(*f as i64),
+            Value::Bool(b) => Value::Int(*b as i64),
+            Value::Char(c) => Value::Int(*c as i64),
+            Value::Str(s) => Value::Int(s.trim().parse::<i64>().or_else(|_| s.trim().parse::<f64>().map(|f| f as i64)).unwrap_or(0)),
+            other => return Err(err(span, format!("cannot convert `{}` to int", other.type_name()))),
+        },
+        "float" => match v {
+            Value::Int(i) => Value::Float(*i as f64),
+            Value::Float(_) => v.clone(),
+            Value::Bool(b) => Value::Float(*b as i64 as f64),
+            Value::Str(s) => Value::Float(s.trim().parse::<f64>().unwrap_or(0.0)),
+            other => return Err(err(span, format!("cannot convert `{}` to float", other.type_name()))),
+        },
+        "str" => Value::Str(v.to_string()),
+        _ => Value::Bool(match v {
+            Value::Bool(b) => *b,
+            Value::Int(i) => *i != 0,
+            Value::Float(f) => *f != 0.0,
+            Value::Str(s) => !s.is_empty(),
+            Value::Null | Value::Void => false,
+            Value::Array(a) => !a.borrow().is_empty(),
+            Value::Dict(d) => !d.borrow().is_empty(),
+            _ => true,
+        }),
+    })
+}
+
 fn err(span: Span, msg: String) -> Diag {
     Diag::error(span, "E0500", msg)
 }
