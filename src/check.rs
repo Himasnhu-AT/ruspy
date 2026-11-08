@@ -149,7 +149,7 @@ impl Checker {
                 let at = self.synth(array);
                 self.expect_index(&at, array.span);
                 let it = self.synth(index);
-                if !it.assignable_to(&Ty::Int(IntWidth::Default)) {
+                if matches!(at, Ty::Array(_)) && !it.assignable_to(&Ty::Int(IntWidth::Default)) {
                     self.error(index.span, "E0314", format!("array index must be `int`, found `{it}`"));
                 }
                 self.synth(value);
@@ -237,6 +237,7 @@ impl Checker {
             ExprKind::Str(_) => Ty::Str,
             ExprKind::Ident(n) => match self.lookup(n) {
                 Some(t) => t,
+                None if n == "self" => Ty::Dynamic, // host-provided handle to the running object
                 None => {
                     self.error(expr.span, "E0303", format!("undefined variable `{n}`"));
                     Ty::Error
@@ -291,6 +292,9 @@ impl Checker {
                 }
             }
             ExprKind::Member(base, _) => {
+                if !matches!(base.node, ExprKind::Ident(_)) {
+                    self.synth(base);
+                }
                 self.enforce_package(base); // math.PI etc. must be imported
                 Ty::Dynamic // package/host object fields are dynamic
             }
@@ -306,10 +310,17 @@ impl Checker {
                 }
                 Ty::Array(Box::new(elem))
             }
+            ExprKind::Dict(pairs) => {
+                for (k, v) in pairs {
+                    self.synth(k);
+                    self.synth(v);
+                }
+                Ty::Dynamic // dictionaries are dynamically typed
+            }
             ExprKind::Index(arr, idx) => {
                 let at = self.synth(arr);
                 let it = self.synth(idx);
-                if !it.assignable_to(&Ty::Int(IntWidth::Default)) && !matches!(it, Ty::Dynamic | Ty::Error) {
+                if matches!(at, Ty::Array(_)) && !it.assignable_to(&Ty::Int(IntWidth::Default)) && !matches!(it, Ty::Dynamic | Ty::Error) {
                     self.error(idx.span, "E0314", format!("array index must be `int`, found `{it}`"));
                 }
                 match at {

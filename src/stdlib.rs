@@ -76,6 +76,7 @@ fn dispatch(name: &str, args: &[Value], span: Span) -> Result<Value, Diag> {
             match &args[0] {
                 Value::Array(a) => Ok(Value::Int(a.borrow().len() as i64)),
                 Value::Str(s) => Ok(Value::Int(s.chars().count() as i64)),
+                Value::Dict(d) => Ok(Value::Int(d.borrow().len() as i64)),
                 other => Err(err(span, format!("`len` expects an array or str, found `{}`", other.type_name()))),
             }
         }

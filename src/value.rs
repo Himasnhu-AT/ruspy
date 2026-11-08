@@ -31,12 +31,120 @@ pub enum Value {
     Void,
     /// The absent value (`null`): "no entity", a missing result.
     Null,
+    /// An opaque host object handle (an entity, a resource). The host decides what
+    /// `h.field`, `h.field = v` and `h.method(args)` mean. Equality is by id; prints `Node#<id>`.
+    Object(u64),
+    /// A string-keyed (or int/bool/char-keyed) dictionary with insertion order and
+    /// reference semantics, like arrays.
+    Dict(DictRef),
+}
+
+/// Shared storage behind `Value::Dict`.
+pub type DictRef = Rc<RefCell<Dict>>;
+
+/// A hashable dictionary key (only scalar kinds; floats and null are rejected).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum DictKey {
+    Int(i64),
+    Str(String),
+    Bool(bool),
+    Char(char),
+}
+
+impl DictKey {
+    pub fn from_value(v: &Value) -> Option<DictKey> {
+        Some(match v {
+            Value::Int(i) => DictKey::Int(*i),
+            Value::Str(s) => DictKey::Str(s.clone()),
+            Value::Bool(b) => DictKey::Bool(*b),
+            Value::Char(c) => DictKey::Char(*c),
+            _ => return None,
+        })
+    }
+    pub fn to_value(&self) -> Value {
+        match self {
+            DictKey::Int(i) => Value::Int(*i),
+            DictKey::Str(s) => Value::Str(s.clone()),
+            DictKey::Bool(b) => Value::Bool(*b),
+            DictKey::Char(c) => Value::Char(*c),
+        }
+    }
+}
+
+/// An insertion-ordered map. Lookup is O(1); `remove` is O(n) (reindexes).
+#[derive(Debug, Clone, Default)]
+pub struct Dict {
+    entries: Vec<(DictKey, Value)>,
+    index: std::collections::HashMap<DictKey, usize>,
+}
+
+impl Dict {
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+    pub fn get(&self, k: &DictKey) -> Option<&Value> {
+        self.index.get(k).map(|&i| &self.entries[i].1)
+    }
+    pub fn get_str(&self, k: &str) -> Option<&Value> {
+        self.get(&DictKey::Str(k.to_string()))
+    }
+    pub fn contains(&self, k: &DictKey) -> bool {
+        self.index.contains_key(k)
+    }
+    pub fn insert(&mut self, k: DictKey, v: Value) {
+        match self.index.get(&k) {
+            Some(&i) => self.entries[i].1 = v,
+            None => {
+                self.index.insert(k.clone(), self.entries.len());
+                self.entries.push((k, v));
+            }
+        }
+    }
+    pub fn remove(&mut self, k: &DictKey) -> Option<Value> {
+        let i = self.index.remove(k)?;
+        let (_, v) = self.entries.remove(i);
+        for (j, (key, _)) in self.entries.iter().enumerate().skip(i) {
+            self.index.insert(key.clone(), j);
+        }
+        Some(v)
+    }
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.index.clear();
+    }
+    pub fn iter(&self) -> impl Iterator<Item = &(DictKey, Value)> {
+        self.entries.iter()
+    }
+}
+
+impl PartialEq for Dict {
+    fn eq(&self, other: &Self) -> bool {
+        self.len() == other.len() && self.entries.iter().all(|(k, v)| other.get(k).is_some_and(|o| values_equal(v, o)))
+    }
 }
 
 impl Value {
     /// Construct an array value from a vector of elements.
     pub fn array(items: Vec<Value>) -> Value {
         Value::Array(Rc::new(RefCell::new(items)))
+    }
+    /// Construct an object handle.
+    pub fn object(id: u64) -> Value {
+        Value::Object(id)
+    }
+    /// Construct a dictionary from key/value pairs (insertion order kept). Keys that are not
+    /// str/int/bool/char are skipped.
+    pub fn dict(pairs: Vec<(Value, Value)>) -> Value {
+        let mut d = Dict::default();
+        for (k, v) in pairs {
+            if let Some(k) = DictKey::from_value(&k) {
+                d.insert(k, v);
+            }
+        }
+        Value::Dict(Rc::new(RefCell::new(d)))
     }
     /// Construct a struct value from a name + field map.
     pub fn strukt(name: impl Into<String>, fields: std::collections::HashMap<String, Value>) -> Value {
@@ -73,6 +181,8 @@ impl Value {
             Value::Struct(_, _) => "struct",
             Value::Void => "void",
             Value::Null => "null",
+            Value::Object(_) => "object",
+            Value::Dict(_) => "dict",
         }
     }
 
@@ -198,13 +308,15 @@ pub fn not(v: &Value, span: Span) -> Result<Value, Diag> {
 }
 
 /// Structural equality with numeric cross-type comparison (`1 == 1.0` is true).
-fn values_equal(l: &Value, r: &Value) -> bool {
+pub fn values_equal(l: &Value, r: &Value) -> bool {
     match (l, r) {
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Str(a), Value::Str(b)) => a == b,
         (Value::Char(a), Value::Char(b)) => a == b,
         (Value::Array(a), Value::Array(b)) => *a.borrow() == *b.borrow(),
         (Value::Struct(na, a), Value::Struct(nb, b)) => na == nb && *a.borrow() == *b.borrow(),
+        (Value::Object(a), Value::Object(b)) => a == b,
+        (Value::Dict(a), Value::Dict(b)) => Rc::ptr_eq(a, b) || *a.borrow() == *b.borrow(),
         (Value::Void, Value::Void) => true,
         (Value::Null, Value::Null) => true,
         _ => match (l.as_f64(), r.as_f64()) {
@@ -275,7 +387,27 @@ impl fmt::Display for Value {
             }
             Value::Void => write!(f, "void"),
             Value::Null => write!(f, "null"),
+            Value::Object(id) => write!(f, "Node#{id}"),
+            Value::Dict(d) => {
+                write!(f, "{{")?;
+                for (i, (k, v)) in d.borrow().iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write_quoted(f, &k.to_value())?;
+                    write!(f, ": ")?;
+                    write_quoted(f, v)?;
+                }
+                write!(f, "}}")
+            }
         }
+    }
+}
+
+fn write_quoted(f: &mut fmt::Formatter<'_>, v: &Value) -> fmt::Result {
+    match v {
+        Value::Str(s) => write!(f, "\"{s}\""),
+        other => write!(f, "{other}"),
     }
 }
 

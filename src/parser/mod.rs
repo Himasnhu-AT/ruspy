@@ -657,6 +657,23 @@ impl Parser {
                 let end = self.eat(Token::RBracket)?;
                 Ok(Spanned::new(ExprKind::Array(items), start.to(end)))
             }
+            Token::LBrace => {
+                let start = self.bump().span;
+                let mut pairs = Vec::new();
+                while !matches!(self.cur(), Token::RBrace) {
+                    let k = self.expression()?;
+                    self.eat(Token::Colon)?;
+                    let v = self.expression()?;
+                    pairs.push((k, v));
+                    if matches!(self.cur(), Token::Comma) {
+                        self.bump();
+                    } else {
+                        break;
+                    }
+                }
+                let end = self.eat(Token::RBrace)?;
+                Ok(Spanned::new(ExprKind::Dict(pairs), start.to(end)))
+            }
             other => Err(Diag::error(sp, "E0105", format!("unexpected `{}` in expression", tok_desc(&other)))),
         }
     }

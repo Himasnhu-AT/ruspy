@@ -36,7 +36,9 @@ pub enum ExprKind {
     Range { start: Box<Expr>, end: Box<Expr>, inclusive: bool },
     /// An array literal `[a, b, c]`.
     Array(Vec<Expr>),
-    /// Indexing `arr[i]`.
+    /// A dictionary literal `{"a": 1, "b": [2, 3]}`.
+    Dict(Vec<(Expr, Expr)>),
+    /// Indexing `arr[i]` / `dict[key]`.
     Index(Box<Expr>, Box<Expr>),
     /// A method call `recv.name(args...)` (array builtins today, host later).
     Method(Box<Expr>, String, Vec<Expr>),

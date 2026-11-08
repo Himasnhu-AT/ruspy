@@ -8,7 +8,7 @@
 
 use crate::ast::{Expr, ExprKind, LogicOp, Program, Stmt, StmtKind, UnOp};
 use crate::diagnostics::{Diag, Span};
-use crate::value::{self, Value};
+use crate::value::{self, DictKey, Value};
 use std::collections::HashMap;
 
 /// Max nested call depth before a diagnostic (prevents native stack overflow).
@@ -27,6 +27,31 @@ pub trait RuspyHost {
     fn call_method(&mut self, object: &str, method: &str, args: Vec<Value>) -> Result<Value, String> {
         let _ = args;
         Err(format!("no package method `{object}.{method}`"))
+    }
+    /// `h.name` on an object handle (`Value::Object`). The host decides what it means.
+    fn object_get(&mut self, id: u64, name: &str) -> Result<Value, String> {
+        Err(format!("object Node#{id} has no property `{name}`"))
+    }
+    /// `h.name = v` on an object handle.
+    fn object_set(&mut self, id: u64, name: &str, value: Value) -> Result<(), String> {
+        let _ = value;
+        Err(format!("cannot set `{name}` on object Node#{id}"))
+    }
+    /// `h.name(args)` on an object handle.
+    fn object_call(&mut self, id: u64, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        let _ = args;
+        Err(format!("object Node#{id} has no method `{name}`"))
+    }
+    /// Is `id` the object this script runs on? When true, `h.name` / `h.name = v` / `h.name()`
+    /// prefer the script's own globals / functions before asking the host.
+    fn is_self(&self, id: u64) -> bool {
+        let _ = id;
+        false
+    }
+    /// A host-provided value for a bare name that is not a script variable (e.g. `self`).
+    fn resolve_name(&mut self, name: &str) -> Option<Value> {
+        let _ = name;
+        None
     }
 }
 
@@ -216,6 +241,18 @@ impl Interpreter {
                 let a = self.eval(array, host)?;
                 let i = self.eval(index, host)?;
                 let rhs = self.eval(value, host)?;
+                if let Value::Dict(d) = &a {
+                    let key = dict_key(&i, index.span)?;
+                    let new = match op {
+                        Some(o) => {
+                            let cur = d.borrow().get(&key).cloned().ok_or_else(|| Diag::error(stmt.span, "E0342", format!("dict has no key {}", show_key(&i))))?;
+                            value::binop(*o, &cur, &rhs, stmt.span)?
+                        }
+                        None => rhs,
+                    };
+                    d.borrow_mut().insert(key, new);
+                    return Ok(Flow::Normal);
+                }
                 let (arr_ref, i) = index_of(&a, &i, stmt.span)?;
                 let new = match op {
                     Some(o) => {
@@ -234,6 +271,29 @@ impl Interpreter {
             StmtKind::FieldAssign { object, field, op, value } => {
                 let obj = self.eval(object, host)?;
                 let rhs = self.eval(value, host)?;
+                if let Value::Object(id) = &obj {
+                    let new = match op {
+                        Some(o) => {
+                            let cur = self.obj_get(*id, field, stmt.span, host)?;
+                            value::binop(*o, &cur, &rhs, stmt.span)?
+                        }
+                        None => rhs,
+                    };
+                    self.obj_set(*id, field, new, stmt.span, host)?;
+                    return Ok(Flow::Normal);
+                }
+                if let Value::Dict(d) = &obj {
+                    let key = DictKey::Str(field.clone());
+                    let new = match op {
+                        Some(o) => {
+                            let cur = d.borrow().get(&key).cloned().ok_or_else(|| Diag::error(stmt.span, "E0342", format!("dict has no key \"{field}\"")))?;
+                            value::binop(*o, &cur, &rhs, stmt.span)?
+                        }
+                        None => rhs,
+                    };
+                    d.borrow_mut().insert(key, new);
+                    return Ok(Flow::Normal);
+                }
                 let Value::Struct(sname, map) = obj else {
                     return Err(Diag::error(object.span, "E0320", format!("cannot set field `{field}` on `{}`", obj.type_name())));
                 };
@@ -339,7 +399,8 @@ impl Interpreter {
             }
             _ => match self.eval(iter, host)? {
                 Value::Array(a) => Ok(a.borrow().clone()),
-                other => Err(Diag::error(iter.span, "E0309", format!("`for` expects a range or array, found `{}`", other.type_name()))),
+                Value::Dict(d) => Ok(d.borrow().iter().map(|(k, _)| k.to_value()).collect()),
+                other => Err(Diag::error(iter.span, "E0309", format!("`for` expects a range, array or dict, found `{}`", other.type_name()))),
             },
         }
     }
@@ -353,7 +414,10 @@ impl Interpreter {
             ExprKind::Str(s) => Ok(Value::Str(s.clone())),
             ExprKind::Bool(b) => Ok(Value::Bool(*b)),
             ExprKind::Null => Ok(Value::Null),
-            ExprKind::Ident(n) => self.lookup(n).cloned().ok_or_else(|| undefined(n, span)),
+            ExprKind::Ident(n) => match self.lookup(n) {
+                Some(v) => Ok(v.clone()),
+                None => host.resolve_name(n).ok_or_else(|| undefined(n, span)),
+            },
             ExprKind::Unary(UnOp::Neg, e) => {
                 let v = self.eval(e, host)?;
                 value::neg(&v, span)
@@ -392,7 +456,7 @@ impl Interpreter {
                 // A bare identifier that is not a local variable is a package (pure
                 // built-ins first, e.g. `math.PI`) or a host object (`tick.bid`).
                 if let ExprKind::Ident(id) = &obj.node {
-                    if self.lookup(id).is_none() {
+                    if self.lookup(id).is_none() && host.resolve_name(id).is_none() {
                         if let Some(result) = crate::packages::get_member(id, field, span) {
                             return result;
                         }
@@ -406,6 +470,12 @@ impl Interpreter {
                         .get(field)
                         .cloned()
                         .ok_or_else(|| Diag::error(span, "E0321", format!("struct `{sname}` has no field `{field}`"))),
+                    Value::Object(id) => self.obj_get(id, field, span, host),
+                    Value::Dict(d) => d
+                        .borrow()
+                        .get_str(field)
+                        .cloned()
+                        .ok_or_else(|| Diag::error(span, "E0341", format!("dict has no key \"{field}\""))),
                     other => Err(Diag::error(span, "E0322", format!("`{}` has no field `{field}`", other.type_name()))),
                 }
             }
@@ -437,9 +507,23 @@ impl Interpreter {
                 }
                 Ok(Value::array(vals))
             }
+            ExprKind::Dict(pairs) => {
+                let mut d = value::Dict::default();
+                for (k, v) in pairs {
+                    let kv = self.eval(k, host)?;
+                    let vv = self.eval(v, host)?;
+                    d.insert(dict_key(&kv, k.span)?, vv);
+                }
+                Ok(Value::Dict(std::rc::Rc::new(std::cell::RefCell::new(d))))
+            }
             ExprKind::Index(arr, idx) => {
                 let a = self.eval(arr, host)?;
                 let i = self.eval(idx, host)?;
+                if let Value::Dict(d) = &a {
+                    let key = dict_key(&i, idx.span)?;
+                    let got = d.borrow().get(&key).cloned();
+                    return got.ok_or_else(|| Diag::error(span, "E0342", format!("dict has no key {}", show_key(&i))));
+                }
                 let (arr_ref, i) = index_of(&a, &i, span)?;
                 let elem = arr_ref.borrow()[i].clone();
                 Ok(elem)
@@ -449,7 +533,7 @@ impl Interpreter {
                 // package call (`math.sin(x)`, `trade.buy(0.1)`): pure packages
                 // first, then the host. Otherwise it's a value method (array builtins).
                 if let ExprKind::Ident(id) = &recv.node {
-                    if self.lookup(id).is_none() {
+                    if self.lookup(id).is_none() && host.resolve_name(id).is_none() {
                         let mut argv = Vec::with_capacity(args.len());
                         for a in args {
                             argv.push(self.eval(a, host)?);
@@ -467,7 +551,11 @@ impl Interpreter {
                 for a in args {
                     argv.push(self.eval(a, host)?);
                 }
-                array_method(&r, name, argv, span)
+                match &r {
+                    Value::Object(id) => self.obj_call(*id, name, argv, span, host),
+                    Value::Dict(d) => dict_method(d, name, argv, span),
+                    _ => array_method(&r, name, argv, span),
+                }
             }
         }
     }
@@ -510,6 +598,30 @@ impl Interpreter {
     }
 
     // ── scope helpers (locals frame with read-through to globals) ─────────────
+    fn obj_get(&mut self, id: u64, name: &str, span: Span, host: &mut dyn RuspyHost) -> Result<Value, Diag> {
+        if host.is_self(id) {
+            if let Some(v) = self.frames[0].get(name) {
+                return Ok(v.clone());
+            }
+        }
+        host.object_get(id, name).map_err(|m| Diag::error(span, "E0331", m))
+    }
+
+    fn obj_set(&mut self, id: u64, name: &str, v: Value, span: Span, host: &mut dyn RuspyHost) -> Result<(), Diag> {
+        if host.is_self(id) && self.frames[0].contains_key(name) {
+            self.frames[0].insert(name.to_string(), v);
+            return Ok(());
+        }
+        host.object_set(id, name, v).map_err(|m| Diag::error(span, "E0332", m))
+    }
+
+    fn obj_call(&mut self, id: u64, name: &str, args: Vec<Value>, span: Span, host: &mut dyn RuspyHost) -> Result<Value, Diag> {
+        if host.is_self(id) && self.funcs.contains_key(name) {
+            return self.call(name, args, span, host);
+        }
+        host.object_call(id, name, args).map_err(|m| Diag::error(span, "E0333", m))
+    }
+
     fn declare(&mut self, name: &str, value: Value) {
         self.frames.last_mut().unwrap().insert(name.to_string(), value);
     }
@@ -558,6 +670,65 @@ fn index_of(arr: &Value, idx: &Value, span: Span) -> Result<(crate::value::Array
 
 /// Dispatch a builtin array method. Non-array receivers, unknown methods, and arity
 /// or empty-array misuse all return diagnostics (never a panic).
+fn dict_key(v: &Value, span: Span) -> Result<DictKey, Diag> {
+    DictKey::from_value(v).ok_or_else(|| Diag::error(span, "E0340", format!("dict keys must be str, int, bool or char, found `{}`", v.type_name())))
+}
+
+fn show_key(v: &Value) -> String {
+    match v {
+        Value::Str(s) => format!("\"{s}\""),
+        other => other.to_string(),
+    }
+}
+
+fn dict_method(d: &crate::value::DictRef, name: &str, args: Vec<Value>, span: Span) -> Result<Value, Diag> {
+    let arity = |want: usize| -> Result<(), Diag> {
+        if args.len() == want {
+            Ok(())
+        } else {
+            Err(Diag::error(span, "E0317", format!("`{name}` takes {want} argument(s), got {}", args.len())))
+        }
+    };
+    match name {
+        "len" | "size" => {
+            arity(0)?;
+            Ok(Value::Int(d.borrow().len() as i64))
+        }
+        "keys" => {
+            arity(0)?;
+            Ok(Value::array(d.borrow().iter().map(|(k, _)| k.to_value()).collect()))
+        }
+        "values" => {
+            arity(0)?;
+            Ok(Value::array(d.borrow().iter().map(|(_, v)| v.clone()).collect()))
+        }
+        "has" => {
+            arity(1)?;
+            Ok(Value::Bool(DictKey::from_value(&args[0]).is_some_and(|k| d.borrow().contains(&k))))
+        }
+        "erase" => {
+            arity(1)?;
+            let k = dict_key(&args[0], span)?;
+            Ok(Value::Bool(d.borrow_mut().remove(&k).is_some()))
+        }
+        "get" => {
+            if args.is_empty() || args.len() > 2 {
+                return Err(Diag::error(span, "E0317", format!("`get` takes 1 or 2 arguments, got {}", args.len())));
+            }
+            let k = dict_key(&args[0], span)?;
+            let got = d.borrow().get(&k).cloned();
+            Ok(got.unwrap_or_else(|| args.get(1).cloned().unwrap_or(Value::Null)))
+        }
+        "clear" => {
+            arity(0)?;
+            d.borrow_mut().clear();
+            Ok(Value::Void)
+        }
+        _ => Err(Diag::error(span, "E0343", format!("unknown dict method `{name}`"))
+            .with_help("try len/keys/values/has/erase/get/clear")),
+    }
+}
+
 fn array_method(recv: &Value, name: &str, args: Vec<Value>, span: Span) -> Result<Value, Diag> {
     let Value::Array(a) = recv else {
         return Err(Diag::error(span, "E0316", format!("`{}` has no method `{name}`", recv.type_name())));
@@ -779,6 +950,54 @@ mod tests {
         assert_eq!(err("struct P { x, y } p = P { x: 1 };")[0].code, "E0325"); // missing field
         assert_eq!(err("struct P { x } p = P { x: 1 }; print p.z;")[0].code, "E0321"); // no such field
         assert_eq!(err("x = 3; x.field = 1;")[0].code, "E0320"); // set field on non-struct
+    }
+
+    #[test]
+    fn dict_literal_index_assign_and_len() {
+        assert_eq!(out(r#"d = {"a": 1, "b": [2, 3]}; print d["a"]; print d["b"][1]; print len(d);"#), vec!["1", "3", "2"]);
+        assert_eq!(out(r#"d = {"a": 1}; d["b"] = 5; d["a"] += 2; print d["a"]; print d["b"]; print len(d);"#), vec!["3", "5", "2"]);
+        assert_eq!(out(r#"d = {1: "x", 2: "y",}; print d[2]; d[3] = "z"; print d.len();"#), vec!["y", "3"]);
+        assert_eq!(out(r#"d = {}; print len(d); print d;"#), vec!["0", "{}"]);
+        assert_eq!(out(r#"d = {"n": "hi", "k": [1]}; print d;"#), vec![r#"{"n": "hi", "k": [1]}"#]);
+    }
+
+    #[test]
+    fn dict_member_sugar() {
+        assert_eq!(out(r#"d = {"hp": 10}; d.hp -= 3; d.mp = 4; print d.hp; print d.mp; print d["mp"];"#), vec!["7", "4", "4"]);
+    }
+
+    #[test]
+    fn dict_methods_and_iteration_keep_insertion_order() {
+        let src = r#"
+            d = {"z": 1, "a": 2, "m": 3};
+            print d.keys(); print d.values();
+            print d.has("a"); print d.has("q");
+            print d.get("a", 9); print d.get("q", 9); print is_null(d.get("q"));
+            print d.erase("z"); print d.erase("z");
+            print d.keys();
+            d["z"] = 0; print d.keys();
+            s = 0; for k in d { s += d[k]; } print s;
+            d.clear(); print len(d);"#;
+        assert_eq!(
+            out(src),
+            vec!["[z, a, m]", "[1, 2, 3]", "true", "false", "2", "9", "true", "true", "false", "[a, m]", "[a, m, z]", "5", "0"]
+        );
+    }
+
+    #[test]
+    fn dict_equality_and_reference_semantics() {
+        assert_eq!(out(r#"print {"a": 1, "b": 2} == {"b": 2, "a": 1}; print {"a": 1} == {"a": 2}; print {"a": 1} != {"a": 1, "b": 1};"#), vec!["true", "false", "true"]);
+        assert_eq!(out(r#"fn put(d) { d["k"] = 1; } d = {}; put(d); put(d); print len(d);"#), vec!["1"]);
+        assert_eq!(out(r#"a = {"x": {"y": 1}}; a["x"]["y"] = 7; print a["x"]["y"]; print a.x.y;"#), vec!["7", "7"]);
+    }
+
+    #[test]
+    fn dict_errors_are_diagnostics() {
+        assert_eq!(err(r#"d = {"a": 1}; print d["b"];"#)[0].code, "E0342");
+        assert_eq!(err(r#"d = {"a": 1}; print d.b;"#)[0].code, "E0341");
+        assert_eq!(err(r#"d = {1.5: 1};"#)[0].code, "E0340");
+        assert_eq!(err(r#"d = {}; d.frob();"#)[0].code, "E0343");
+        assert_eq!(err(r#"d = {"a": 1}; d["q"] += 1;"#)[0].code, "E0342");
     }
 
     #[test]

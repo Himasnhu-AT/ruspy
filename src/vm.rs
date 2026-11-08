@@ -307,6 +307,7 @@ impl Compiler {
                 let f = ch.name(field);
                 ch.emit(Op::GetMember(o, f), sp);
             }
+            ExprKind::Dict(_) => return Err(Unsupported("dictionaries".into())),
             ExprKind::Array(_) | ExprKind::Index(_, _) | ExprKind::Method(_, _, _) => {
                 return Err(Unsupported("arrays".into()));
             }
@@ -408,7 +409,7 @@ impl<'a> Vm<'a> {
                         Some(l) => l.get(name).cloned().or_else(|| self.globals.get(name).cloned()),
                         None => self.globals.get(name).cloned(),
                     };
-                    match v {
+                    match v.or_else(|| host.resolve_name(name)) {
                         Some(v) => stack.push(v),
                         None => return Err(Diag::error(sp, "E0303", format!("undefined variable `{name}`"))),
                     }
@@ -477,7 +478,25 @@ impl<'a> Vm<'a> {
                 Op::GetMember(o, fld) => {
                     let obj = &chunk.names[*o as usize];
                     let field = &chunk.names[*fld as usize];
-                    let v = host.get_member(obj, field).map_err(|m| Diag::error(sp, "E0301", m))?;
+                    // A variable (or host name like `self`) holding an object handle / dict
+                    // takes precedence over a host package of the same name.
+                    let held = match &locals {
+                        Some(l) => l.get(obj).cloned().or_else(|| self.globals.get(obj).cloned()),
+                        None => self.globals.get(obj).cloned(),
+                    }
+                    .or_else(|| host.resolve_name(obj));
+                    let v = match held {
+                        Some(Value::Object(id)) => match (host.is_self(id), self.globals.get(field.as_str())) {
+                            (true, Some(g)) => g.clone(),
+                            _ => host.object_get(id, field).map_err(|m| Diag::error(sp, "E0331", m))?,
+                        },
+                        Some(Value::Dict(d)) => d
+                            .borrow()
+                            .get_str(field)
+                            .cloned()
+                            .ok_or_else(|| Diag::error(sp, "E0341", format!("dict has no key \"{field}\"")))?,
+                        _ => host.get_member(obj, field).map_err(|m| Diag::error(sp, "E0301", m))?,
+                    };
                     stack.push(v);
                 }
                 Op::Call(n, argc) => {

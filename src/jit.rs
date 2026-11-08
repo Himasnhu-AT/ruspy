@@ -608,6 +608,7 @@ impl<'a, 'b, M: Module> Lowerer<'a, 'b, M> {
             ExprKind::Str(_)
             | ExprKind::Null
             | ExprKind::Array(_)
+            | ExprKind::Dict(_)
             | ExprKind::Index(_, _)
             | ExprKind::Member(_, _)
             | ExprKind::Method(_, _, _)

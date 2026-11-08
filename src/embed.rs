@@ -22,6 +22,19 @@ impl<'a> Ctx<'a> {
 
 pub type HostFn = Box<dyn Fn(&mut Ctx, &[Value]) -> Result<Value, String>>;
 
+pub type ObjGetFn = Box<dyn Fn(&mut Ctx, u64, &str) -> Result<Value, String>>;
+pub type ObjSetFn = Box<dyn Fn(&mut Ctx, u64, &str, Value) -> Result<(), String>>;
+pub type ObjCallFn = Box<dyn Fn(&mut Ctx, u64, &str, &[Value]) -> Result<Value, String>>;
+
+/// Host hooks for object handles (`Value::Object`): what `h.field`, `h.field = v` and
+/// `h.method(args)` do. Shared by forked engines.
+#[derive(Default)]
+struct ObjHooks {
+    get: Option<ObjGetFn>,
+    set: Option<ObjSetFn>,
+    call: Option<ObjCallFn>,
+}
+
 /// An error with a resolved source location.
 #[derive(Debug, Clone)]
 pub struct ScriptError {
@@ -59,13 +72,17 @@ struct ModuleData {
 
 pub struct Engine {
     fns: Rc<HashMap<String, HostFn>>,
+    hooks: Rc<ObjHooks>,
     modules: Vec<ModuleData>,
     pub step_limit: u64,
     pub backend: Backend,
+    self_id: Option<u64>,
 }
 
 struct Bridge<'a, 'b> {
     fns: &'a HashMap<String, HostFn>,
+    hooks: &'a ObjHooks,
+    self_id: Option<u64>,
     ctx: Ctx<'b>,
 }
 impl RuspyHost for Bridge<'_, '_> {
@@ -74,6 +91,33 @@ impl RuspyHost for Bridge<'_, '_> {
             Some(f) => f(&mut self.ctx, &args),
             None => Err(format!("function `{name}` is not defined")),
         }
+    }
+    fn object_get(&mut self, id: u64, name: &str) -> Result<Value, String> {
+        match &self.hooks.get {
+            Some(f) => f(&mut self.ctx, id, name),
+            None => Err(format!("object Node#{id} has no property `{name}`")),
+        }
+    }
+    fn object_set(&mut self, id: u64, name: &str, value: Value) -> Result<(), String> {
+        match &self.hooks.set {
+            Some(f) => f(&mut self.ctx, id, name, value),
+            None => Err(format!("cannot set `{name}` on object Node#{id}")),
+        }
+    }
+    fn object_call(&mut self, id: u64, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        match &self.hooks.call {
+            Some(f) => f(&mut self.ctx, id, name, &args),
+            None => Err(format!("object Node#{id} has no method `{name}`")),
+        }
+    }
+    fn is_self(&self, id: u64) -> bool {
+        self.self_id == Some(id)
+    }
+    fn resolve_name(&mut self, name: &str) -> Option<Value> {
+        if name == "self" {
+            return self.self_id.map(Value::Object);
+        }
+        None
     }
     fn get_member(&mut self, object: &str, member: &str) -> Result<Value, String> {
         match self.fns.get(&format!("{object}.{member}")) {
@@ -92,14 +136,34 @@ impl RuspyHost for Bridge<'_, '_> {
 
 impl Engine {
     pub fn new(backend: Backend) -> Self {
-        Engine { fns: Rc::new(HashMap::new()), modules: vec![], step_limit: 1_000_000, backend }
+        Engine { fns: Rc::new(HashMap::new()), hooks: Rc::new(ObjHooks::default()), modules: vec![], step_limit: 1_000_000, backend, self_id: None }
     }
 
     /// A new engine with no modules that shares this one's host functions (cheap: one `Rc`
     /// clone). Lets a host give every script instance its own engine, so instances can call
     /// each other re-entrantly, without registering the functions again.
     pub fn fork(&self) -> Engine {
-        Engine { fns: self.fns.clone(), modules: vec![], step_limit: self.step_limit, backend: self.backend }
+        Engine { fns: self.fns.clone(), hooks: self.hooks.clone(), modules: vec![], step_limit: self.step_limit, backend: self.backend, self_id: None }
+    }
+
+    /// The object handle this engine's scripts run on. `self` in a script resolves to it, and
+    /// `self.x` / `self.f()` read the script's own variables / functions first (so a running
+    /// instance never needs the host to reach back into itself). Set it before `load`.
+    pub fn set_self_handle(&mut self, id: Option<u64>) {
+        self.self_id = id;
+    }
+
+    /// `h.name` on a `Value::Object` handle.
+    pub fn register_object_get(&mut self, f: impl Fn(&mut Ctx, u64, &str) -> Result<Value, String> + 'static) {
+        Rc::get_mut(&mut self.hooks).expect("register object hooks before forking the engine").get = Some(Box::new(f));
+    }
+    /// `h.name = v` (and compound `h.name += v`, which reads via the get hook first).
+    pub fn register_object_set(&mut self, f: impl Fn(&mut Ctx, u64, &str, Value) -> Result<(), String> + 'static) {
+        Rc::get_mut(&mut self.hooks).expect("register object hooks before forking the engine").set = Some(Box::new(f));
+    }
+    /// `h.name(args)` on a `Value::Object` handle.
+    pub fn register_object_call(&mut self, f: impl Fn(&mut Ctx, u64, &str, &[Value]) -> Result<Value, String> + 'static) {
+        Rc::get_mut(&mut self.hooks).expect("register object hooks before forking the engine").call = Some(Box::new(f));
     }
 
     pub fn register(&mut self, name: &str, f: impl Fn(&mut Ctx, &[Value]) -> Result<Value, String> + 'static) {
@@ -123,7 +187,7 @@ impl Engine {
             return Err(diags.iter().filter(|d| d.is_error()).map(|d| Self::err(&shell, d)).collect());
         }
         let (prog, _) = crate::parser::parse_program(src);
-        let mut bridge = Bridge { fns: &self.fns, ctx: Ctx { state } };
+        let mut bridge = Bridge { fns: &self.fns, hooks: &self.hooks, self_id: self.self_id, ctx: Ctx { state } };
         let exec = match self.backend {
             Backend::Interpreter => {
                 let mut i = Interpreter::new();
@@ -183,7 +247,7 @@ impl Engine {
     pub fn call(&mut self, m: Module, f: &str, args: Vec<Value>, state: &mut dyn Any) -> Result<Value, ScriptError> {
         let limit = self.step_limit;
         let md = &mut self.modules[m.0];
-        let mut bridge = Bridge { fns: &self.fns, ctx: Ctx { state } };
+        let mut bridge = Bridge { fns: &self.fns, hooks: &self.hooks, self_id: self.self_id, ctx: Ctx { state } };
         let r = match &mut md.exec {
             Exec::Interp(i) => {
                 i.set_max_steps(limit);
@@ -407,6 +471,104 @@ fn show() { return "got " + tostr(null); }
         let m = e.load("m", "fn f() { return node.name(1, 2); }\nfn g() { return game.level; }", &mut w).unwrap();
         assert_eq!(e.call(m, "f", vec![], &mut w).unwrap(), Value::Str("n2".into()));
         assert_eq!(e.call(m, "g", vec![], &mut w).unwrap(), Value::Int(3));
+    }
+
+    /// A tiny object world: id -> field map; "pos" is a host-computed property.
+    type Objs = HashMap<u64, HashMap<String, Value>>;
+
+    fn obj_engine(b: Backend) -> Engine {
+        let mut e = Engine::new(b);
+        e.register("get_name", |c, a| {
+            let Value::Object(id) = a[0] else { return Err("not an object".into()) };
+            let w = c.state::<Objs>().ok_or("no world")?;
+            Ok(w[&id].get("name").cloned().unwrap_or(Value::Null))
+        });
+        e.register("tostr", |_c, a| Ok(Value::Str(a[0].to_string())));
+        e.register("spawn", |c, _a| {
+            let w = c.state::<Objs>().ok_or("no world")?;
+            let id = w.len() as u64 + 1;
+            w.insert(id, HashMap::new());
+            Ok(Value::Object(id))
+        });
+        e.register_object_get(|c, id, name| {
+            let w = c.state::<Objs>().ok_or("no world")?;
+            w.get(&id).and_then(|o| o.get(name)).cloned().ok_or(format!("no property `{name}`"))
+        });
+        e.register_object_set(|c, id, name, v| {
+            let w = c.state::<Objs>().ok_or("no world")?;
+            w.get_mut(&id).ok_or("gone")?.insert(name.to_string(), v);
+            Ok(())
+        });
+        e.register_object_call(|_c, id, name, args| Ok(Value::Str(format!("{id}.{name}/{}", args.len()))));
+        e
+    }
+
+    #[test]
+    fn object_handles_get_set_call_and_compare() {
+        let src = r#"
+fn run() {
+    a = spawn(); b = spawn();
+    a.hp = 10;
+    a.hp -= 3;
+    a.name = "kid";
+    out = [a.hp, a.name, a.go(1, 2), a == b, a == a, is_null(a), tostr(a), get_name(a)];
+    return out;
+}
+"#;
+        for b in [Backend::Interpreter] {
+            let mut e = obj_engine(b);
+            let mut w = Objs::new();
+            let m = e.load("o", src, &mut w).unwrap_or_else(|er| panic!("{er:?}"));
+            let v = e.call(m, "run", vec![], &mut w).unwrap_or_else(|er| panic!("{er}"));
+            assert_eq!(v.to_string(), "[7, kid, 1.go/2, false, true, false, Node#1, kid]", "{b:?}");
+        }
+    }
+
+    #[test]
+    fn self_handle_prefers_own_globals_and_functions() {
+        let src = r#"
+hp = 5;
+fn bump() { self.hp += 1; self.pos = 3; return self.hp; }
+fn twice() { return self.bump() + self.bump(); }
+fn other() { return self.later(2); }
+fn me() { return self; }
+"#;
+        for b in [Backend::Interpreter] {
+            let mut e = obj_engine(b);
+            e.set_self_handle(Some(9));
+            let mut w = Objs::new();
+            w.insert(9, HashMap::new());
+            let m = e.load("s", src, &mut w).unwrap_or_else(|er| panic!("{er:?}"));
+            assert_eq!(e.call(m, "bump", vec![], &mut w).unwrap(), Value::Int(6), "{b:?}");
+            assert_eq!(e.global(m, "hp"), Some(Value::Int(6)));
+            assert_eq!(w[&9]["pos"], Value::Int(3), "non-member goes to the host");
+            assert_eq!(e.call(m, "twice", vec![], &mut w).unwrap(), Value::Int(15));
+            assert_eq!(e.call(m, "other", vec![], &mut w).unwrap(), Value::Str("9.later/1".into()));
+            assert_eq!(e.call(m, "me", vec![], &mut w).unwrap(), Value::Object(9));
+        }
+    }
+
+    #[test]
+    fn dicts_need_the_interpreter_and_the_vm_reports_it() {
+        let src = r#"fn f() { d = {"a": 1}; d.b = 2; d["a"] += 1; return d["a"] + d.b + len(d); }"#;
+        let mut w = World::new();
+        let mut i = Engine::new(Backend::Interpreter);
+        let m = i.load("t", src, &mut w).unwrap();
+        assert_eq!(i.call(m, "f", vec![], &mut w).unwrap(), Value::Int(6));
+        let errs = Engine::new(Backend::Vm).load("t", src, &mut w).unwrap_err();
+        assert_eq!(errs[0].code, "E0900");
+    }
+
+    #[test]
+    fn vm_reads_object_properties() {
+        let src = "fn f() { a = spawn(); a2 = a; return a2.hp; }\nfn g() { return self.hp; }";
+        let mut e = obj_engine(Backend::Vm);
+        e.set_self_handle(Some(1));
+        let mut w = Objs::new();
+        w.insert(1, HashMap::from([("hp".to_string(), Value::Int(4))]));
+        let m = e.load("v", src, &mut w).unwrap_or_else(|er| panic!("{er:?}"));
+        assert_eq!(e.call(m, "f", vec![], &mut w).unwrap_err().code, "E0331"); // new object has no hp
+        assert_eq!(e.call(m, "g", vec![], &mut w).unwrap(), Value::Int(4));
     }
 
     #[test]
