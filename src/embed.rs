@@ -169,6 +169,18 @@ impl Engine {
         Engine { fns: self.fns.clone(), hooks: self.hooks.clone(), modules: vec![], step_limit: self.step_limit, backend: self.backend, self_id: None }
     }
 
+    /// Is a host function registered under `name`?
+    pub fn has_host(&self, name: &str) -> bool {
+        self.fns.contains_key(name)
+    }
+
+    /// Calls host function `name` from the host side (no script running); `state` reaches the
+    /// function through its `Ctx`.
+    pub fn call_host(&self, name: &str, args: &[Value], state: &mut dyn Any) -> Result<Value, String> {
+        let mut ctx = Ctx { state, fns: Some(&self.fns) };
+        ctx.call_host(name, args)
+    }
+
     /// The object handle this engine's scripts run on. `self` in a script resolves to it, and
     /// `self.x` / `self.f()` read the script's own variables / functions first (so a running
     /// instance never needs the host to reach back into itself). Set it before `load`.
