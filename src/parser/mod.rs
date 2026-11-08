@@ -781,6 +781,17 @@ impl Parser {
                 let end = self.eat(Token::RBracket)?;
                 Ok(Spanned::new(ExprKind::Array(items), start.to(end)))
             }
+            // Casts: `int(x)`, `float(x)`, `str(x)`, `bool(x)` (the type keywords used as calls).
+            Token::TypeInt | Token::TypeFloat | Token::TypeStr | Token::TypeBool if matches!(self.peek(1), Token::LParen) => {
+                let name = match self.cur() {
+                    Token::TypeInt => "int",
+                    Token::TypeFloat => "float",
+                    Token::TypeStr => "str",
+                    _ => "bool",
+                };
+                self.bump();
+                Ok(Spanned::new(ExprKind::Ident(name.to_string()), sp))
+            }
             Token::LBrace => {
                 let start = self.bump().span;
                 let mut pairs = Vec::new();

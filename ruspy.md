@@ -148,3 +148,13 @@ backends and coroutines (after a resume) record it. Builtins: `get_stack()` retu
 `{"function", "file", "line", "col"}` dicts (innermost first, the caller of `get_stack` on top);
 `print_stack()` sends the same as text to the host's `print` function. The embed API names the
 file for these with the module name passed to `Engine::load`.
+
+## 11. integer division warning, casts
+
+`7 / 2` is `3` (int / int stays int). When the checker sees both operands as ints (literals,
+annotated or inferred variables) it emits warning `W0101` ("integer division ..."); runtime is
+unchanged. Silence it with `float(a) / b` (fractional) or `idiv(a, b)` (explicit truncation).
+`Engine::warnings(module)` returns the located checker warnings of a loaded module.
+
+Casts: `int(x)` (truncates floats, parses strings, 0 if unparsable), `float(x)`, `str(x)`,
+`bool(x)` (false for 0, 0.0, "", null, empty array/dict).

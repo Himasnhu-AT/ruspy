@@ -409,13 +409,21 @@ impl Checker {
             {
                 Ty::Str
             }
-            Add | Sub | Mul | Div | Rem => match lt.arith_result(rt) {
+            Add | Sub | Mul | Div | Rem => {
+                if op == Div && matches!(lt, Ty::Int(_)) && matches!(rt, Ty::Int(_)) {
+                    self.diags.push(
+                        Diag::warning(span, "W0101", "integer division: both operands are int, so the result is truncated")
+                            .with_help("use `float(a) / b` for a fractional result, or `idiv(a, b)` to say truncation is intended"),
+                    );
+                }
+                match lt.arith_result(rt) {
                 Some(t) => t,
                 None => {
                     self.error(span, "E0204", format!("operator cannot apply to `{lt}` and `{rt}`"));
                     Ty::Error
                 }
-            },
+                }
+            }
         }
     }
 

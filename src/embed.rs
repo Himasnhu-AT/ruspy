@@ -91,6 +91,7 @@ struct ModuleData {
     name: String,
     lines: Rc<LineIndex>,
     exec: Exec,
+    warnings: Vec<ScriptError>,
 }
 
 pub struct Engine {
@@ -205,11 +206,12 @@ impl Engine {
     /// host functions called from top level.
     pub fn load(&mut self, name: &str, src: &str, state: &mut dyn Any) -> Result<Module, Vec<ScriptError>> {
         let lines = Rc::new(LineIndex::new(src));
-        let shell = ModuleData { name: name.into(), lines, exec: Exec::Interp(Interpreter::new()) };
+        let shell = ModuleData { name: name.into(), lines, exec: Exec::Interp(Interpreter::new()), warnings: vec![] };
         let diags = crate::check::check_str(src);
         if diags.iter().any(|d| d.is_error()) {
             return Err(diags.iter().filter(|d| d.is_error()).map(|d| Self::err(&shell, d)).collect());
         }
+        let warnings: Vec<ScriptError> = diags.iter().filter(|d| !d.is_error()).map(|d| Self::err(&shell, d)).collect();
         let (prog, _) = crate::parser::parse_program(src);
         let mut bridge = Bridge { fns: &self.fns, hooks: &self.hooks, self_id: self.self_id, ctx: Ctx { state, fns: Some(&self.fns) } };
         let exec = match self.backend {
@@ -230,7 +232,7 @@ impl Engine {
                 Exec::Vm { bc: std::rc::Rc::new(bc), globals }
             }
         };
-        self.modules.push(ModuleData { exec, ..shell });
+        self.modules.push(ModuleData { exec, warnings, ..shell });
         Ok(Module(self.modules.len() - 1))
     }
 
@@ -268,6 +270,11 @@ impl Engine {
             Exec::Interp(i) => i.has_fn(f),
             Exec::Vm { bc, .. } => Vm::new_public(bc).has_fn(f),
         }
+    }
+
+    /// Checker warnings for module `m` (e.g. `W0101` integer division), located. Empty when clean.
+    pub fn warnings(&self, m: Module) -> &[ScriptError] {
+        &self.modules[m.0].warnings
     }
 
     /// Does calling `f` start a coroutine (its body has `await`)? Interpreter modules only.
@@ -797,6 +804,41 @@ fn show() { print_stack(); }
         let err = e.resume(m, t, Value::Null, &mut w).unwrap_err();
         let names: Vec<_> = err.trace.iter().map(|(f, l, _)| (f.as_str(), *l)).collect();
         assert_eq!(names, vec![("helper", 6), ("go", 3)]);
+    }
+
+    #[test]
+    fn int_division_warns_and_casts_work() {
+        let src = "hp = 7;\nmax_hp: int = 2;\nfn bar() { return hp / max_hp; }\nfn ok1() { return 7.0 / 2; }\nfn ok2(a, b) { return a / b; }\nfn ok3() { return float(hp) / max_hp; }\nfn ok4() { return idiv(hp, max_hp); }\nfn lit() { return 1 / 2; }\n";
+        let mut w = World::new();
+        let mut e = Engine::new(Backend::Interpreter);
+        let m = e.load("w.ruspy", src, &mut w).unwrap();
+        let ws: Vec<_> = e.warnings(m).iter().map(|x| (x.code, x.line)).collect();
+        assert_eq!(ws, vec![("W0101", 3), ("W0101", 8)], "{:?}", e.warnings(m));
+        // Nothing changes at runtime.
+        assert_eq!(e.call(m, "bar", vec![], &mut w).unwrap(), Value::Int(3));
+        assert_eq!(e.call(m, "ok1", vec![], &mut w).unwrap(), Value::Float(3.5));
+        assert_eq!(e.call(m, "ok3", vec![], &mut w).unwrap(), Value::Float(3.5));
+        assert_eq!(e.call(m, "ok4", vec![], &mut w).unwrap(), Value::Int(3));
+        assert_eq!(e.call(m, "ok2", vec![Value::Int(7), Value::Int(2)], &mut w).unwrap(), Value::Int(3));
+        let mut e2 = Engine::new(Backend::Vm);
+        let m2 = e2.load("w.ruspy", "fn f() { return 3 / 2; }", &mut w).unwrap();
+        assert_eq!(e2.warnings(m2).len(), 1);
+    }
+
+    #[test]
+    fn casts() {
+        let src = r#"fn f() {
+    return [int(3.9), int("42"), int("x"), int(true), float(2), float("1.5"), str(12) + "!", str(1.5), bool(0), bool(""), bool("a"), bool([]), bool([0]), bool(null), int(-2.7)];
+}
+fn g() { x: int = int(7.5); return x; }"#;
+        for bk in [Backend::Interpreter] {
+            let mut e = Engine::new(bk);
+            let mut w = World::new();
+            let m = e.load("c", src, &mut w).unwrap_or_else(|er| panic!("{er:?}"));
+            let v = e.call(m, "f", vec![], &mut w).unwrap();
+            assert_eq!(v.to_string(), "[3, 42, 0, 1, 2, 1.5, 12!, 1.5, false, false, true, false, true, false, -2]");
+            assert_eq!(e.call(m, "g", vec![], &mut w).unwrap(), Value::Int(7));
+        }
     }
 
     #[test]
