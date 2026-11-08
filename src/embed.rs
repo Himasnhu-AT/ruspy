@@ -7,6 +7,7 @@ use crate::value::Value;
 use crate::vm::{self, Bytecode, Vm};
 use std::any::Any;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 /// Passed to every host function. `state` is whatever the caller handed to `Engine::call`
 /// (e.g. `&mut World`); downcast it with `ctx.state::<World>()`.
@@ -57,7 +58,7 @@ struct ModuleData {
 }
 
 pub struct Engine {
-    fns: HashMap<String, HostFn>,
+    fns: Rc<HashMap<String, HostFn>>,
     modules: Vec<ModuleData>,
     pub step_limit: u64,
     pub backend: Backend,
@@ -75,17 +76,36 @@ impl RuspyHost for Bridge<'_, '_> {
         }
     }
     fn get_member(&mut self, object: &str, member: &str) -> Result<Value, String> {
-        Err(format!("`{object}` has no member `{member}`"))
+        match self.fns.get(&format!("{object}.{member}")) {
+            Some(f) => f(&mut self.ctx, &[]),
+            None => Err(format!("`{object}` has no member `{member}`")),
+        }
+    }
+    /// `obj.method(args)` on a bare name calls the host function registered as `"obj.method"`.
+    fn call_method(&mut self, object: &str, method: &str, args: Vec<Value>) -> Result<Value, String> {
+        match self.fns.get(&format!("{object}.{method}")) {
+            Some(f) => f(&mut self.ctx, &args),
+            None => Err(format!("no method `{object}.{method}`")),
+        }
     }
 }
 
 impl Engine {
     pub fn new(backend: Backend) -> Self {
-        Engine { fns: HashMap::new(), modules: vec![], step_limit: 1_000_000, backend }
+        Engine { fns: Rc::new(HashMap::new()), modules: vec![], step_limit: 1_000_000, backend }
+    }
+
+    /// A new engine with no modules that shares this one's host functions (cheap: one `Rc`
+    /// clone). Lets a host give every script instance its own engine, so instances can call
+    /// each other re-entrantly, without registering the functions again.
+    pub fn fork(&self) -> Engine {
+        Engine { fns: self.fns.clone(), modules: vec![], step_limit: self.step_limit, backend: self.backend }
     }
 
     pub fn register(&mut self, name: &str, f: impl Fn(&mut Ctx, &[Value]) -> Result<Value, String> + 'static) {
-        self.fns.insert(name.to_string(), Box::new(f));
+        Rc::get_mut(&mut self.fns)
+            .expect("register host functions before forking the engine")
+            .insert(name.to_string(), Box::new(f));
     }
 
     fn err(m: &ModuleData, d: &Diag) -> ScriptError {
@@ -124,6 +144,35 @@ impl Engine {
         Ok(Module(self.modules.len() - 1))
     }
 
+    /// A module-level variable's current value (`None` if the module never set it).
+    pub fn global(&self, m: Module, name: &str) -> Option<Value> {
+        match &self.modules[m.0].exec {
+            Exec::Interp(i) => i.global(name).cloned(),
+            Exec::Vm { globals, .. } => globals.get(name).cloned(),
+        }
+    }
+
+    /// Sets a module-level variable (creates it if missing). Functions see the new value on
+    /// their next call.
+    pub fn set_global(&mut self, m: Module, name: &str, v: Value) {
+        match &mut self.modules[m.0].exec {
+            Exec::Interp(i) => i.set_var(name, v),
+            Exec::Vm { globals, .. } => {
+                globals.insert(name.to_string(), v);
+            }
+        }
+    }
+
+    /// Names of the module-level variables, sorted.
+    pub fn global_names(&self, m: Module) -> Vec<String> {
+        let mut v: Vec<String> = match &self.modules[m.0].exec {
+            Exec::Interp(i) => i.global_names(),
+            Exec::Vm { globals, .. } => globals.keys().cloned().collect(),
+        };
+        v.sort();
+        v
+    }
+
     pub fn has_fn(&self, m: Module, f: &str) -> bool {
         match &self.modules[m.0].exec {
             Exec::Interp(i) => i.has_fn(f),
@@ -151,6 +200,36 @@ impl Engine {
         };
         r.map_err(|d| Self::err(md, &d))
     }
+}
+
+/// What a source file declares at top level, in source order (no type check, no run).
+/// Hosts use it to list a script's member variables and functions (e.g. in an inspector).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Outline {
+    /// Top-level variables, first assignment order, deduplicated.
+    pub vars: Vec<String>,
+    /// Top-level functions: name and parameter names.
+    pub fns: Vec<(String, Vec<String>)>,
+}
+
+pub fn outline(src: &str) -> Outline {
+    use crate::ast::StmtKind;
+    let (prog, _) = crate::parser::parse_program(src);
+    let mut o = Outline::default();
+    for st in &prog {
+        match &st.node {
+            StmtKind::Var { name, .. } | StmtKind::Assign { name, .. } => {
+                if !o.vars.contains(name) {
+                    o.vars.push(name.clone());
+                }
+            }
+            StmtKind::Fn { name, params, .. } => {
+                o.fns.push((name.clone(), params.iter().map(|p| p.name.clone()).collect()));
+            }
+            _ => {}
+        }
+    }
+    o
 }
 
 #[cfg(test)]
@@ -298,5 +377,42 @@ fn show() { return "got " + tostr(null); }
         assert_eq!(run_ret(src, "eq"), Value::Bool(true));
         assert_eq!(run_ret(src, "ne"), Value::Bool(false));
         assert_eq!(run_ret(src, "show"), Value::Str("got null".into()));
+    }
+
+    #[test]
+    fn fork_globals_and_methods() {
+        for b in [Backend::Interpreter, Backend::Vm] {
+            let mut base = engine(b);
+            base.register("node.name", |_c, a| Ok(Value::Str(format!("n{}", a.len()))));
+            base.register("game.level", |_c, _a| Ok(Value::Int(3)));
+            let mut w = World::new();
+            let src = "speed = 2;\nfn bump() { speed = speed + 1; return speed; }\n";
+            let mut e1 = base.fork();
+            let mut e2 = base.fork();
+            let m1 = e1.load("a", src, &mut w).unwrap();
+            let m2 = e2.load("a", src, &mut w).unwrap();
+            assert_eq!(e1.call(m1, "bump", vec![], &mut w).unwrap(), Value::Int(3));
+            assert_eq!(e1.global(m1, "speed"), Some(Value::Int(3)));
+            assert_eq!(e2.global(m2, "speed"), Some(Value::Int(2)), "instances are separate");
+            e2.set_global(m2, "speed", Value::Int(10));
+            assert_eq!(e2.call(m2, "bump", vec![], &mut w).unwrap(), Value::Int(11));
+            assert_eq!(e1.global_names(m1), vec!["speed".to_string()]);
+        }
+        // Methods on bare names route to "obj.method" host functions (interpreter path).
+        let mut base = Engine::new(Backend::Interpreter);
+        base.register("node.name", |_c, a| Ok(Value::Str(format!("n{}", a.len()))));
+        base.register("game.level", |_c, _a| Ok(Value::Int(3)));
+        let mut e = base.fork();
+        let mut w = World::new();
+        let m = e.load("m", "fn f() { return node.name(1, 2); }\nfn g() { return game.level; }", &mut w).unwrap();
+        assert_eq!(e.call(m, "f", vec![], &mut w).unwrap(), Value::Str("n2".into()));
+        assert_eq!(e.call(m, "g", vec![], &mut w).unwrap(), Value::Int(3));
+    }
+
+    #[test]
+    fn outline_lists_vars_and_fns() {
+        let o = outline("speed = 5.0;\nhp = 3;\nspeed = 6.0;\nfn _ready() { }\nfn hit(dmg, from) { hp = hp - dmg; }\n");
+        assert_eq!(o.vars, vec!["speed".to_string(), "hp".to_string()]);
+        assert_eq!(o.fns, vec![("_ready".to_string(), vec![]), ("hit".to_string(), vec!["dmg".to_string(), "from".to_string()])]);
     }
 }

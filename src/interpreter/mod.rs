@@ -97,6 +97,16 @@ impl Interpreter {
         self.frames[0].insert(name.into(), value);
     }
 
+    /// A global variable's value.
+    pub fn global(&self, name: &str) -> Option<&Value> {
+        self.frames[0].get(name)
+    }
+
+    /// Names of the global variables (unordered).
+    pub fn global_names(&self) -> Vec<String> {
+        self.frames[0].keys().cloned().collect()
+    }
+
     pub fn output(&self) -> &[String] {
         &self.output
     }
