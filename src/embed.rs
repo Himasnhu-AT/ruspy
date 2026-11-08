@@ -13,8 +13,22 @@ use std::rc::Rc;
 /// (e.g. `&mut World`); downcast it with `ctx.state::<World>()`.
 pub struct Ctx<'a> {
     state: &'a mut dyn Any,
+    fns: Option<&'a HashMap<String, HostFn>>,
 }
 impl<'a> Ctx<'a> {
+    /// Is a host function registered under `name`? (For object hooks that map `h.name(..)` to a
+    /// host function.)
+    pub fn has_host(&self, name: &str) -> bool {
+        self.fns.is_some_and(|f| f.contains_key(name))
+    }
+    /// Calls the host function `name` (what a script's `name(args)` would call).
+    pub fn call_host(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        let fns = self.fns;
+        match fns.and_then(|f| f.get(name)) {
+            Some(f) => f(self, args),
+            None => Err(format!("function `{name}` is not defined")),
+        }
+    }
     pub fn state<T: 'static>(&mut self) -> Option<&mut T> {
         self.state.downcast_mut::<T>()
     }
@@ -187,7 +201,7 @@ impl Engine {
             return Err(diags.iter().filter(|d| d.is_error()).map(|d| Self::err(&shell, d)).collect());
         }
         let (prog, _) = crate::parser::parse_program(src);
-        let mut bridge = Bridge { fns: &self.fns, hooks: &self.hooks, self_id: self.self_id, ctx: Ctx { state } };
+        let mut bridge = Bridge { fns: &self.fns, hooks: &self.hooks, self_id: self.self_id, ctx: Ctx { state, fns: Some(&self.fns) } };
         let exec = match self.backend {
             Backend::Interpreter => {
                 let mut i = Interpreter::new();
@@ -247,7 +261,7 @@ impl Engine {
     pub fn call(&mut self, m: Module, f: &str, args: Vec<Value>, state: &mut dyn Any) -> Result<Value, ScriptError> {
         let limit = self.step_limit;
         let md = &mut self.modules[m.0];
-        let mut bridge = Bridge { fns: &self.fns, hooks: &self.hooks, self_id: self.self_id, ctx: Ctx { state } };
+        let mut bridge = Bridge { fns: &self.fns, hooks: &self.hooks, self_id: self.self_id, ctx: Ctx { state, fns: Some(&self.fns) } };
         let r = match &mut md.exec {
             Exec::Interp(i) => {
                 i.set_max_steps(limit);
@@ -478,11 +492,6 @@ fn show() { return "got " + tostr(null); }
 
     fn obj_engine(b: Backend) -> Engine {
         let mut e = Engine::new(b);
-        e.register("get_name", |c, a| {
-            let Value::Object(id) = a[0] else { return Err("not an object".into()) };
-            let w = c.state::<Objs>().ok_or("no world")?;
-            Ok(w[&id].get("name").cloned().unwrap_or(Value::Null))
-        });
         e.register("tostr", |_c, a| Ok(Value::Str(a[0].to_string())));
         e.register("spawn", |c, _a| {
             let w = c.state::<Objs>().ok_or("no world")?;
@@ -499,7 +508,19 @@ fn show() { return "got " + tostr(null); }
             w.get_mut(&id).ok_or("gone")?.insert(name.to_string(), v);
             Ok(())
         });
-        e.register_object_call(|_c, id, name, args| Ok(Value::Str(format!("{id}.{name}/{}", args.len()))));
+        e.register("get_name", |c, a| {
+            let Value::Object(id) = a[0] else { return Err("not an object".into()) };
+            let w = c.state::<Objs>().ok_or("no world")?;
+            Ok(w[&id].get("name").cloned().unwrap_or(Value::Null))
+        });
+        e.register_object_call(|c, id, name, args| {
+            if c.has_host(name) {
+                let mut a = vec![Value::Object(id)];
+                a.extend_from_slice(args);
+                return c.call_host(name, &a);
+            }
+            Ok(Value::Str(format!("{id}.{name}/{}", args.len())))
+        });
         e
     }
 
@@ -511,7 +532,7 @@ fn run() {
     a.hp = 10;
     a.hp -= 3;
     a.name = "kid";
-    out = [a.hp, a.name, a.go(1, 2), a == b, a == a, is_null(a), tostr(a), get_name(a)];
+    out = [a.hp, a.name, a.go(1, 2), a.get_name(), a == b, a == a, is_null(a), tostr(a), get_name(a)];
     return out;
 }
 "#;
@@ -520,7 +541,7 @@ fn run() {
             let mut w = Objs::new();
             let m = e.load("o", src, &mut w).unwrap_or_else(|er| panic!("{er:?}"));
             let v = e.call(m, "run", vec![], &mut w).unwrap_or_else(|er| panic!("{er}"));
-            assert_eq!(v.to_string(), "[7, kid, 1.go/2, false, true, false, Node#1, kid]", "{b:?}");
+            assert_eq!(v.to_string(), "[7, kid, 1.go/2, kid, false, true, false, Node#1, kid]", "{b:?}");
         }
     }
 
