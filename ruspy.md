@@ -138,3 +138,13 @@ itself a coroutine does not wait for `f` (it starts detached and the outer resum
 Coroutines need the interpreter backend (the VM reports `E0900`). Locals survive suspension; a
 resumed coroutine gets a fresh step budget. Errors after a resume carry the located diagnostic and
 free the coroutine.
+
+## 10. call stacks
+
+A runtime error carries the script call stack: `Diag::trace` / `ScriptError::trace` (innermost
+frame first; function name and line:col — the failing expression for the innermost frame, the call
+site for the others) and `ScriptError::trace_text()` (`  at fn (file:line:col)` lines). Both
+backends and coroutines (after a resume) record it. Builtins: `get_stack()` returns an array of
+`{"function", "file", "line", "col"}` dicts (innermost first, the caller of `get_stack` on top);
+`print_stack()` sends the same as text to the host's `print` function. The embed API names the
+file for these with the module name passed to `Engine::load`.

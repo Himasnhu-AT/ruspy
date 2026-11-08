@@ -58,6 +58,14 @@ pub struct ScriptError {
     pub col: usize,
     pub code: &'static str,
     pub message: String,
+    /// Script call stack at the failure, innermost first: `(function, line, col)`.
+    pub trace: Vec<(String, usize, usize)>,
+}
+impl ScriptError {
+    /// `  at fn (module:line:col)` per frame, innermost first (empty without a stack).
+    pub fn trace_text(&self) -> String {
+        self.trace.iter().map(|(f, l, c)| format!("  at {f} ({}:{l}:{c})", self.module)).collect::<Vec<_>>().join("\n")
+    }
 }
 impl std::fmt::Display for ScriptError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -81,7 +89,7 @@ enum Exec {
 }
 struct ModuleData {
     name: String,
-    lines: LineIndex,
+    lines: Rc<LineIndex>,
     exec: Exec,
 }
 
@@ -189,13 +197,14 @@ impl Engine {
 
     fn err(m: &ModuleData, d: &Diag) -> ScriptError {
         let (line, col) = m.lines.locate(d.span.start);
-        ScriptError { module: m.name.clone(), line, col, code: d.code, message: d.message.clone() }
+        let trace = d.trace.iter().map(|t| { let (l, c) = m.lines.locate(t.span.start); (t.func.clone(), l, c) }).collect();
+        ScriptError { module: m.name.clone(), line, col, code: d.code, message: d.message.clone(), trace }
     }
 
     /// Parse, type-check and run top-level statements (state init). `state` is available to
     /// host functions called from top level.
     pub fn load(&mut self, name: &str, src: &str, state: &mut dyn Any) -> Result<Module, Vec<ScriptError>> {
-        let lines = LineIndex::new(src);
+        let lines = Rc::new(LineIndex::new(src));
         let shell = ModuleData { name: name.into(), lines, exec: Exec::Interp(Interpreter::new()) };
         let diags = crate::check::check_str(src);
         if diags.iter().any(|d| d.is_error()) {
@@ -206,13 +215,15 @@ impl Engine {
         let exec = match self.backend {
             Backend::Interpreter => {
                 let mut i = Interpreter::new();
+                i.set_source(name, shell.lines.clone());
                 i.set_max_steps(self.step_limit);
                 i.run(&prog, &mut bridge).map_err(|d| vec![Self::err(&shell, &d)])?;
                 Exec::Interp(i)
             }
             Backend::Vm => {
-                let bc = vm::compile(&prog).map_err(|u| vec![ScriptError { module: name.into(), line: 0, col: 0, code: "E0900", message: format!("VM unsupported: {}", u.0) }])?;
+                let bc = vm::compile(&prog).map_err(|u| vec![ScriptError { module: name.into(), line: 0, col: 0, code: "E0900", message: format!("VM unsupported: {}", u.0), trace: vec![] }])?;
                 let mut v = Vm::new_public(&bc);
+                v.set_source(name, shell.lines.clone());
                 v.set_max_steps(self.step_limit);
                 v.run_public(&mut bridge).map_err(|d| vec![Self::err(&shell, &d)])?;
                 let globals = v.take_globals();
@@ -319,6 +330,7 @@ impl Engine {
             }
             Exec::Vm { bc, globals } => {
                 let mut v = Vm::new_public(bc);
+                v.set_source(&md.name, md.lines.clone());
                 v.set_max_steps(limit);
                 v.set_globals(std::mem::take(globals));
                 let r = v.call_named(f, args, &mut bridge);
@@ -734,6 +746,57 @@ fn nested() { z = go("inner"); return z; }
         assert_eq!(errs[0].code, "E0361");
         let errs = Engine::new(Backend::Vm).load("c", "fn f() { await 1; }", &mut w).unwrap_err();
         assert_eq!(errs[0].code, "E0900");
+    }
+
+    #[test]
+    fn errors_carry_a_call_stack_and_get_stack_works_on_both_backends() {
+        let src = r#"fn a(x) {
+    return b(x) + 1;
+}
+fn b(x) {
+    y = 10 / x;
+    return y;
+}
+fn stack() { return c(); }
+fn c() { return get_stack(); }
+fn show() { print_stack(); }
+"#;
+        for bk in [Backend::Interpreter, Backend::Vm] {
+            let mut e = Engine::new(bk);
+            let logged = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+            let l2 = logged.clone();
+            e.register("print", move |_c, a| {
+                l2.borrow_mut().push(a[0].to_string());
+                Ok(Value::Void)
+            });
+            let mut w = World::new();
+            let m = e.load("t.ruspy", src, &mut w).unwrap_or_else(|er| panic!("{er:?}"));
+            let err = e.call(m, "a", vec![Value::Int(0)], &mut w).unwrap_err();
+            let t: Vec<_> = err.trace.iter().map(|(f, l, _)| (f.as_str(), *l)).collect();
+            assert_eq!(t, vec![("b", 5), ("a", 2)], "{bk:?}: {err}");
+            assert_eq!(err.trace_text().lines().next().unwrap(), "  at b (t.ruspy:5:9)", "{bk:?}");
+            let v = e.call(m, "stack", vec![], &mut w).unwrap();
+            assert_eq!(
+                v.to_string(),
+                r#"[{"function": "c", "file": "t.ruspy", "line": 9, "col": 17}, {"function": "stack", "file": "t.ruspy", "line": 8, "col": 21}]"#,
+                "{bk:?}"
+            );
+            e.call(m, "show", vec![], &mut w).unwrap();
+            assert_eq!(logged.borrow()[0], "stack:\n  at show (t.ruspy:10:13)", "{bk:?}");
+        }
+    }
+
+    #[test]
+    fn coroutine_errors_have_a_trace() {
+        let src = "fn go() {\n  await 1;\n  helper();\n}\nfn helper() {\n  x = 1 / 0;\n}\n";
+        let mut e = Engine::new(Backend::Interpreter);
+        let mut w = World::new();
+        let m = e.load("c", src, &mut w).unwrap();
+        e.call(m, "go", vec![], &mut w).unwrap();
+        let t = e.take_suspended(m).pop().unwrap().0;
+        let err = e.resume(m, t, Value::Null, &mut w).unwrap_err();
+        let names: Vec<_> = err.trace.iter().map(|(f, l, _)| (f.as_str(), *l)).collect();
+        assert_eq!(names, vec![("helper", 6), ("go", 3)]);
     }
 
     #[test]

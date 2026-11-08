@@ -63,14 +63,24 @@ pub struct Diag {
     pub code: &'static str,
     pub message: String,
     pub help: Option<String>,
+    /// Script call stack at the failure, innermost first (empty outside function bodies).
+    pub trace: Vec<TraceFrame>,
+}
+
+/// One frame of a [`Diag::trace`] / call stack: function name and the position inside it
+/// (the failing expression for the innermost frame, the call site for the others).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraceFrame {
+    pub func: String,
+    pub span: Span,
 }
 
 impl Diag {
     pub fn error(span: Span, code: &'static str, message: impl Into<String>) -> Self {
-        Self { severity: Severity::Error, span, code, message: message.into(), help: None }
+        Self { severity: Severity::Error, span, code, message: message.into(), help: None, trace: Vec::new() }
     }
     pub fn warning(span: Span, code: &'static str, message: impl Into<String>) -> Self {
-        Self { severity: Severity::Warning, span, code, message: message.into(), help: None }
+        Self { severity: Severity::Warning, span, code, message: message.into(), help: None, trace: Vec::new() }
     }
     pub fn with_help(mut self, help: impl Into<String>) -> Self {
         self.help = Some(help.into());

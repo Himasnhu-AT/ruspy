@@ -29,12 +29,13 @@ pub struct Coroutine {
     stack: Vec<Cursor>,
     /// Suspended at the statement the top block cursor points at.
     pending: bool,
+    name: String,
 }
 
 impl Coroutine {
-    pub(super) fn new(root: std::rc::Rc<Vec<Stmt>>, frame: HashMap<String, Value>) -> Coroutine {
+    pub(super) fn new(root: std::rc::Rc<Vec<Stmt>>, frame: HashMap<String, Value>, name: &str) -> Coroutine {
         let first = Cursor::Block { stmts: root.as_slice() as *const [Stmt], idx: 0 };
-        Coroutine { _root: root, frame, stack: vec![first], pending: false }
+        Coroutine { _root: root, frame, stack: vec![first], pending: false, name: name.to_string() }
     }
 }
 
@@ -75,7 +76,15 @@ impl Interpreter {
     /// finishes or hits the next `await`.
     pub(super) fn co_run(&mut self, co: &mut Coroutine, resume: Option<Value>, host: &mut dyn RuspyHost) -> Result<Outcome, Diag> {
         self.frames.push(std::mem::take(&mut co.frame));
-        let r = self.co_loop(co, resume, host);
+        let saved = std::mem::take(&mut self.cs);
+        self.cs = crate::callstack::CallStack::default();
+        self.cs.adopt_source(&saved);
+        self.cs.push(&co.name);
+        let mut r = self.co_loop(co, resume, host);
+        if let Err(d) = &mut r {
+            self.cs.attach(d);
+        }
+        self.cs = saved;
         co.frame = self.frames.pop().unwrap_or_default();
         r
     }

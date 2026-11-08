@@ -332,12 +332,18 @@ pub struct Vm<'a> {
     output: Vec<String>,
     steps: u64,
     depth: usize,
+    cs: crate::callstack::CallStack,
     max_steps: u64,
 }
 
 impl<'a> Vm<'a> {
     fn new(bc: &'a Bytecode) -> Self {
-        Vm { bc, globals: HashMap::new(), output: Vec::new(), steps: 0, depth: 0, max_steps: MAX_STEPS }
+        Vm { bc, globals: HashMap::new(), output: Vec::new(), steps: 0, depth: 0, cs: Default::default(), max_steps: MAX_STEPS }
+    }
+
+    /// Names the source for call stacks (`get_stack`, error traces).
+    pub fn set_source(&mut self, file: &str, lines: std::rc::Rc<crate::diagnostics::LineIndex>) {
+        self.cs.set_source(file, lines);
     }
 
     pub fn set_max_steps(&mut self, n: u64) {
@@ -542,6 +548,7 @@ impl<'a> Vm<'a> {
     }
 
     fn call(&mut self, name: &str, args: Vec<Value>, sp: Span, host: &mut dyn RuspyHost) -> Result<Value, Diag> {
+        self.cs.mark(sp);
         // `chunk` borrows the program (lifetime 'a), so it survives `&mut self` calls.
         if let Some(chunk) = self.bc.funcs.get(name) {
             let chunk: &'a Chunk = chunk;
@@ -556,9 +563,23 @@ impl<'a> Vm<'a> {
                 frame.insert(p.clone(), a);
             }
             self.depth += 1;
-            let r = self.exec(chunk, Some(frame), host);
+            self.cs.push(name);
+            let mut r = self.exec(chunk, Some(frame), host);
+            if let Err(d) = &mut r {
+                self.cs.attach(d);
+            }
+            self.cs.pop();
             self.depth -= 1;
             return r;
+        }
+        if let Some(b) = self.cs.builtin(name) {
+            return match b {
+                crate::callstack::Builtin::Value(v) => Ok(v),
+                crate::callstack::Builtin::Print(t) => {
+                    self.output.push(t.clone());
+                    host.call_function("print", vec![Value::Str(t)]).map_err(|m| Diag::error(sp, "E0300", m))
+                }
+            };
         }
         if let Some(result) = crate::stdlib::call(name, &args, sp) {
             return result;

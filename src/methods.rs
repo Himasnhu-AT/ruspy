@@ -277,6 +277,20 @@ pub fn fmt(args: &[Value], span: Span) -> Result<Value, Diag> {
 
 /// Vector/color constructors: `vec2(x,y)`, `vec3(x,y,z)`, `Color(r,g,b[,a])` (also from one array).
 pub fn construct(name: &str, args: &[Value], span: Span) -> Result<Value, Diag> {
+    // Fast path: 2..=4 plain numbers, no allocation.
+    if (2..=4).contains(&args.len()) && args.iter().all(|a| matches!(a, Value::Int(_) | Value::Float(_))) {
+        let mut n = [0.0f64; 4];
+        for (i, a) in args.iter().enumerate() {
+            n[i] = a.as_f64().unwrap_or(0.0);
+        }
+        match (name, args.len()) {
+            ("vec2" | "Vec2", 2) => return Ok(Value::Vec2([n[0], n[1]])),
+            ("vec3" | "Vec3", 3) => return Ok(Value::Vec3([n[0], n[1], n[2]])),
+            ("color" | "Color", 3) => return Ok(Value::Color([n[0], n[1], n[2], 1.0])),
+            ("color" | "Color", 4) => return Ok(Value::Color(n)),
+            _ => {}
+        }
+    }
     let mut nums = Vec::new();
     let flat: Vec<Value> = match args {
         [Value::Array(a)] => a.borrow().clone(),

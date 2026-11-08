@@ -71,14 +71,14 @@ impl RuspyHost for DefaultHost {
 /// A user-defined function.
 #[derive(Clone)]
 struct FnDef {
-    params: Vec<String>,
+    params: std::rc::Rc<Vec<String>>,
     body: std::rc::Rc<Vec<Stmt>>,
     /// The body contains `await`: calling it starts a coroutine.
     coroutine: bool,
 }
 
 fn fn_def(params: &[crate::ast::Param], body: &[Stmt]) -> FnDef {
-    FnDef { params: params.iter().map(|p| p.name.clone()).collect(), body: std::rc::Rc::new(body.to_vec()), coroutine: coroutine::contains_await(body) }
+    FnDef { params: std::rc::Rc::new(params.iter().map(|p| p.name.clone()).collect()), body: std::rc::Rc::new(body.to_vec()), coroutine: coroutine::contains_await(body) }
 }
 
 /// Non-local control flow threaded through statement execution.
@@ -100,6 +100,7 @@ pub struct Interpreter {
     coroutines: HashMap<u64, coroutine::Coroutine>,
     next_co: u64,
     suspended: Vec<(u64, Value)>,
+    cs: crate::callstack::CallStack,
     steps: u64,
     depth: usize,
     max_steps: u64,
@@ -121,6 +122,7 @@ impl Interpreter {
             coroutines: HashMap::new(),
             next_co: 1,
             suspended: Vec::new(),
+            cs: Default::default(),
             steps: 0,
             depth: 0,
             max_steps: MAX_STEPS,
@@ -128,6 +130,11 @@ impl Interpreter {
     }
 
     /// Per-call step budget (default 20M).
+    /// Names the source for call stacks (`get_stack`, error traces).
+    pub fn set_source(&mut self, file: &str, lines: std::rc::Rc<crate::diagnostics::LineIndex>) {
+        self.cs.set_source(file, lines);
+    }
+
     pub fn set_max_steps(&mut self, n: u64) {
         self.max_steps = n;
     }
@@ -674,7 +681,17 @@ impl Interpreter {
     /// Resolve a call: user functions first (so a user may shadow a builtin), then
     /// the stdlib builtins, then the host.
     fn call(&mut self, name: &str, args: Vec<Value>, span: Span, host: &mut dyn RuspyHost) -> Result<Value, Diag> {
+        self.cs.mark(span);
         let Some(func) = self.funcs.get(name).cloned() else {
+            if let Some(b) = self.cs.builtin(name) {
+                return match b {
+                    crate::callstack::Builtin::Value(v) => Ok(v),
+                    crate::callstack::Builtin::Print(t) => {
+                        self.output.push(t.clone());
+                        host.call_function("print", vec![Value::Str(t)]).map_err(|m| Diag::error(span, "E0300", m))
+                    }
+                };
+            }
             if let Some(result) = crate::stdlib::call(name, &args, span) {
                 return result;
             }
@@ -696,7 +713,7 @@ impl Interpreter {
             frame.insert(p.clone(), a.clone());
         }
         if func.coroutine {
-            let mut co = coroutine::Coroutine::new(func.body.clone(), frame);
+            let mut co = coroutine::Coroutine::new(func.body.clone(), frame, name);
             return match self.co_run(&mut co, None, host)? {
                 coroutine::Outcome::Done(v) => Ok(v),
                 coroutine::Outcome::Suspended(a) => {
@@ -710,7 +727,17 @@ impl Interpreter {
         }
         self.depth += 1;
         self.frames.push(frame);
+        self.cs.push(name);
         let flow = self.exec_block(&func.body, host);
+        if let Err(d) = &flow {
+            let mut d = d.clone();
+            self.cs.attach(&mut d);
+            self.cs.pop();
+            self.frames.pop();
+            self.depth -= 1;
+            return Err(d);
+        }
+        self.cs.pop();
         self.frames.pop();
         self.depth -= 1;
         match flow? {
