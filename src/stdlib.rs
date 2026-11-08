@@ -16,7 +16,8 @@ pub fn is_builtin(name: &str) -> bool {
         name,
         "abs" | "sqrt" | "pow" | "floor" | "ceil" | "round" | "min" | "max" | "ln" | "exp"
             | "is_nan" | "is_finite" | "nan" | "sma" | "ema" | "wma" | "rsi" | "stdev" | "mean"
-            | "sum" | "highest" | "lowest" | "len" | "tostr" | "is_null"
+            | "sum" | "highest" | "lowest" | "len" | "tostr" | "is_null" | "fmt" | "vec2" | "Vec2"
+            | "vec3" | "Vec3" | "color" | "Color"
     )
 }
 
@@ -63,6 +64,8 @@ fn dispatch(name: &str, args: &[Value], span: Span) -> Result<Value, Diag> {
             arity(name, args, 2, span)?;
             Ok(pick(&args[0], &args[1], name, span, false)?)
         }
+        "fmt" => crate::methods::fmt(args, span),
+        "vec2" | "Vec2" | "vec3" | "Vec3" | "color" | "Color" => crate::methods::construct(name, args, span),
         "tostr" => {
             arity(name, args, 1, span)?;
             Ok(Value::Str(args[0].to_string()))

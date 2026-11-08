@@ -37,6 +37,29 @@ pub enum Value {
     /// A string-keyed (or int/bool/char-keyed) dictionary with insertion order and
     /// reference semantics, like arrays.
     Dict(DictRef),
+    /// 2D / 3D vector and RGBA color value types (copied on assignment, like numbers).
+    Vec2([f64; 2]),
+    Vec3([f64; 3]),
+    Color([f64; 4]),
+}
+
+/// Components of a vector-like value: `(kind, components, count)`; kind 2 = Vec2, 3 = Vec3, 4 = Color.
+pub fn vec_parts(v: &Value) -> Option<(u8, [f64; 4], usize)> {
+    match v {
+        Value::Vec2(a) => Some((2, [a[0], a[1], 0.0, 0.0], 2)),
+        Value::Vec3(a) => Some((3, [a[0], a[1], a[2], 0.0], 3)),
+        Value::Color(a) => Some((4, *a, 4)),
+        _ => None,
+    }
+}
+
+/// Builds a vector-like value of `kind` from components.
+pub fn vec_make(kind: u8, c: [f64; 4]) -> Value {
+    match kind {
+        2 => Value::Vec2([c[0], c[1]]),
+        3 => Value::Vec3([c[0], c[1], c[2]]),
+        _ => Value::Color(c),
+    }
 }
 
 /// Shared storage behind `Value::Dict`.
@@ -183,6 +206,9 @@ impl Value {
             Value::Null => "null",
             Value::Object(_) => "object",
             Value::Dict(_) => "dict",
+            Value::Vec2(_) => "Vec2",
+            Value::Vec3(_) => "Vec3",
+            Value::Color(_) => "Color",
         }
     }
 
@@ -251,6 +277,16 @@ pub fn binop(op: BinOp, l: &Value, r: &Value, span: Span) -> Result<Value, Diag>
         }
     }
 
+    // Vectors: `+ -` componentwise, `* /` by a scalar or componentwise, `%` formats strings.
+    if let Some(res) = vec_binop(op, l, r) {
+        return res.ok_or_else(|| type_err(op, l, r, span));
+    }
+    if op == Rem {
+        if let Value::Str(f) = l {
+            return Ok(Value::Str(format_percent(f, r)));
+        }
+    }
+
     // Numeric path.
     match (l, r) {
         // Both integers → stay integer (exact), except a division that must guard 0.
@@ -290,8 +326,112 @@ pub fn binop(op: BinOp, l: &Value, r: &Value, span: Span) -> Result<Value, Diag>
     }
 }
 
+/// `Some(Some(v))` result, `Some(None)` vector operands that don't fit, `None` not a vector op.
+fn vec_binop(op: BinOp, l: &Value, r: &Value) -> Option<Option<Value>> {
+    use BinOp::*;
+    let (lv, rv) = (vec_parts(l), vec_parts(r));
+    if lv.is_none() && rv.is_none() {
+        return None;
+    }
+    if !matches!(op, Add | Sub | Mul | Div) {
+        return Some(None);
+    }
+    match (lv, rv) {
+        (Some((k, a, n)), Some((k2, b, _))) => {
+            if k != k2 {
+                return Some(None);
+            }
+            let mut o = [0.0; 4];
+            for i in 0..n {
+                o[i] = match op {
+                    Add => a[i] + b[i],
+                    Sub => a[i] - b[i],
+                    Mul => a[i] * b[i],
+                    _ => a[i] / b[i],
+                };
+            }
+            Some(Some(vec_make(k, o)))
+        }
+        (Some((k, a, n)), None) => {
+            let s = r.as_f64()?;
+            let mut o = [0.0; 4];
+            for i in 0..n {
+                o[i] = match op {
+                    Mul => a[i] * s,
+                    Div => a[i] / s,
+                    _ => return Some(None),
+                };
+            }
+            Some(Some(vec_make(k, o)))
+        }
+        (None, Some((k, b, n))) => {
+            let s = l.as_f64()?;
+            let mut o = [0.0; 4];
+            for i in 0..n {
+                o[i] = match op {
+                    Mul => s * b[i],
+                    _ => return Some(None),
+                };
+            }
+            Some(Some(vec_make(k, o)))
+        }
+        (None, None) => None,
+    }
+}
+
+/// `"%s has %d (%.2f)" % [a, b, c]` (a single non-array value is one argument; `%%` is `%`).
+fn format_percent(fmt: &str, args: &Value) -> String {
+    let items: Vec<Value> = match args {
+        Value::Array(a) => a.borrow().clone(),
+        other => vec![other.clone()],
+    };
+    let mut it = items.into_iter();
+    let mut out = String::new();
+    let cs: Vec<char> = fmt.chars().collect();
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] != '%' {
+            out.push(cs[i]);
+            i += 1;
+            continue;
+        }
+        i += 1;
+        if i < cs.len() && cs[i] == '%' {
+            out.push('%');
+            i += 1;
+            continue;
+        }
+        let mut prec: Option<usize> = None;
+        if i < cs.len() && cs[i] == '.' {
+            i += 1;
+            let mut p = 0;
+            while i < cs.len() && cs[i].is_ascii_digit() {
+                p = p * 10 + cs[i] as usize - '0' as usize;
+                i += 1;
+            }
+            prec = Some(p);
+        }
+        let Some(&c) = cs.get(i) else { break };
+        i += 1;
+        let v = it.next().unwrap_or(Value::Null);
+        match c {
+            'd' => out.push_str(&v.as_f64().map_or_else(|| v.to_string(), |x| format!("{}", x.trunc() as i64))),
+            'f' => out.push_str(&v.as_f64().map_or_else(|| v.to_string(), |x| format!("{:.*}", prec.unwrap_or(6), x))),
+            _ => out.push_str(&v.to_string()),
+        }
+    }
+    out
+}
+
 /// Unary negation (`-x`), promoting nothing.
 pub fn neg(v: &Value, span: Span) -> Result<Value, Diag> {
+    if let Some((k, a, n)) = vec_parts(v) {
+        let mut o = [0.0; 4];
+        for i in 0..n {
+            o[i] = -a[i];
+        }
+        return Ok(vec_make(k, o));
+    }
     match v {
         Value::Int(i) => Ok(Value::Int(i.wrapping_neg())),
         Value::Float(f) => Ok(Value::Float(-f)),
@@ -316,6 +456,9 @@ pub fn values_equal(l: &Value, r: &Value) -> bool {
         (Value::Array(a), Value::Array(b)) => *a.borrow() == *b.borrow(),
         (Value::Struct(na, a), Value::Struct(nb, b)) => na == nb && *a.borrow() == *b.borrow(),
         (Value::Object(a), Value::Object(b)) => a == b,
+        (Value::Vec2(a), Value::Vec2(b)) => a == b,
+        (Value::Vec3(a), Value::Vec3(b)) => a == b,
+        (Value::Color(a), Value::Color(b)) => a == b,
         (Value::Dict(a), Value::Dict(b)) => Rc::ptr_eq(a, b) || *a.borrow() == *b.borrow(),
         (Value::Void, Value::Void) => true,
         (Value::Null, Value::Null) => true,
@@ -387,6 +530,9 @@ impl fmt::Display for Value {
             }
             Value::Void => write!(f, "void"),
             Value::Null => write!(f, "null"),
+            Value::Vec2(a) => write!(f, "({}, {})", a[0], a[1]),
+            Value::Vec3(a) => write!(f, "({}, {}, {})", a[0], a[1], a[2]),
+            Value::Color(a) => write!(f, "Color({}, {}, {}, {})", a[0], a[1], a[2], a[3]),
             Value::Object(id) => write!(f, "Node#{id}"),
             Value::Dict(d) => {
                 write!(f, "{{")?;

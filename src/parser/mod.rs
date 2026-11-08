@@ -16,6 +16,8 @@ pub struct Parser {
     pos: usize,
     /// Declared struct names, pre-scanned so `Name { .. }` disambiguates from a block.
     struct_names: std::collections::HashSet<String>,
+    /// Names declared with `const` (assignments to them are errors).
+    consts: std::collections::HashSet<String>,
     /// Current expression/statement nesting, and binary operators seen in the current
     /// top-level expression (left-nested chains are as deep as they are long).
     depth: usize,
@@ -41,7 +43,7 @@ impl Parser {
                 }
             }
         }
-        Parser { tokens, pos: 0, struct_names, depth: 0, ops: 0 }
+        Parser { tokens, pos: 0, struct_names, consts: Default::default(), depth: 0, ops: 0 }
     }
 
     // ── cursor ──────────────────────────────────────────────────────────────
@@ -167,6 +169,16 @@ impl Parser {
             // Typed declaration is the one form that needs `ident :` lookahead;
             // everything else parses an expression and checks for an assignment.
             Token::Identifier(_) if matches!(self.peek(1), Token::Colon) => self.typed_var(),
+            // Contextual keywords (still valid as plain names elsewhere).
+            Token::Identifier(k) if k == "const" && matches!(self.peek(1), Token::Identifier(_)) => self.const_decl(),
+            Token::Identifier(k) if k == "enum" && matches!(self.peek(1), Token::Identifier(_)) && matches!(self.peek(2), Token::LBrace) => {
+                self.enum_decl()
+            }
+            Token::Identifier(k)
+                if k == "match" && !matches!(self.peek(1), Token::LParen | Token::Assign | Token::Dot | Token::Semicolon | Token::LBracket) =>
+            {
+                self.match_stmt()
+            }
             _ => self.expr_or_assign(),
         }
     }
@@ -194,6 +206,9 @@ impl Parser {
         let end = self.eat(Token::Semicolon)?;
         let span = lhs.span.to(end);
         match lhs.node {
+            ExprKind::Ident(name) if self.consts.contains(&name) => {
+                Err(Diag::error(lhs.span, "E0113", format!("cannot assign to constant `{name}`")))
+            }
             ExprKind::Ident(name) => Ok(Spanned::new(StmtKind::Assign { name, name_span: lhs.span, op, value }, span)),
             ExprKind::Index(array, index) => {
                 Ok(Spanned::new(StmtKind::IndexAssign { array: *array, index: *index, op, value }, span))
@@ -204,6 +219,92 @@ impl Parser {
             _ => Err(Diag::error(lhs.span, "E0107", "invalid assignment target")
                 .with_help("assign to a variable, array element, or struct field")),
         }
+    }
+
+    /// `const NAME = expr;` — a variable that cannot be reassigned.
+    fn const_decl(&mut self) -> PResult<Stmt> {
+        let start = self.bump().span; // `const`
+        let mut st = self.statement()?;
+        if let StmtKind::Assign { name, op: None, value, .. } = st.node.clone() {
+            st.node = StmtKind::Var { name, ty: None, value };
+        }
+        match &st.node {
+            StmtKind::Var { name, .. } => {
+                self.consts.insert(name.clone());
+                Ok(Spanned::new(st.node, start.to(st.span)))
+            }
+            _ => Err(Diag::error(start, "E0111", "`const` must declare a variable: `const NAME = value;`")),
+        }
+    }
+
+    /// `enum State { A, B = 5, C }` — declares `State` as a read-only dict name → int.
+    fn enum_decl(&mut self) -> PResult<Stmt> {
+        let start = self.bump().span; // `enum`
+        let (name, nsp) = self.ident_name()?;
+        self.eat(Token::LBrace)?;
+        let mut pairs = Vec::new();
+        let mut next = 0i64;
+        while !matches!(self.cur(), Token::RBrace | Token::Eof) {
+            let (m, msp) = self.ident_name()?;
+            if matches!(self.cur(), Token::Assign) {
+                self.bump();
+                let neg = if matches!(self.cur(), Token::Minus) {
+                    self.bump();
+                    true
+                } else {
+                    false
+                };
+                match self.cur().clone() {
+                    Token::Number(n) => {
+                        self.bump();
+                        next = if neg { -n } else { n };
+                    }
+                    _ => return Err(Diag::error(self.cur_span(), "E0112", "enum values must be integer literals")),
+                }
+            }
+            pairs.push((Spanned::new(ExprKind::Str(m), msp), Spanned::new(ExprKind::Int(next), msp)));
+            next += 1;
+            if matches!(self.cur(), Token::Comma) {
+                self.bump();
+            }
+        }
+        let end = self.eat(Token::RBrace)?;
+        self.consts.insert(name.clone());
+        let _ = nsp;
+        Ok(Spanned::new(StmtKind::Var { name, ty: None, value: Spanned::new(ExprKind::Dict(pairs), start.to(end)) }, start.to(end)))
+    }
+
+    /// `match x { 1 | 2 => { .. }, "a" => { .. }, _ => { .. } }`
+    fn match_stmt(&mut self) -> PResult<Stmt> {
+        let start = self.bump().span; // `match`
+        let scrut = self.expression()?;
+        self.eat(Token::LBrace)?;
+        let mut arms = Vec::new();
+        while !matches!(self.cur(), Token::RBrace | Token::Eof) {
+            let mut pats = Vec::new();
+            let mut wild = false;
+            loop {
+                if matches!(self.cur(), Token::Identifier(n) if n == "_") {
+                    self.bump();
+                    wild = true;
+                } else {
+                    pats.push(self.expression()?);
+                }
+                if matches!(self.cur(), Token::Pipe) {
+                    self.bump();
+                } else {
+                    break;
+                }
+            }
+            self.eat(Token::FatArrow)?;
+            let body = self.block()?;
+            if matches!(self.cur(), Token::Comma) {
+                self.bump();
+            }
+            arms.push(crate::ast::MatchArm { pats, wild, body });
+        }
+        let end = self.eat(Token::RBrace)?;
+        Ok(Spanned::new(StmtKind::Match { scrut, arms }, start.to(end)))
     }
 
     fn struct_decl(&mut self) -> PResult<Stmt> {
@@ -734,6 +835,8 @@ fn tok_desc(t: &Token) -> String {
         Token::LParen => "(".into(),
         Token::RParen => ")".into(),
         Token::LBrace => "{".into(),
+        Token::Pipe => "|".into(),
+        Token::FatArrow => "=>".into(),
         Token::RBrace => "}".into(),
         Token::Eof => "end of input".into(),
         other => format!("{other:?}"),

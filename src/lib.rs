@@ -4,6 +4,7 @@ pub mod check;
 pub mod loader;
 pub mod packages;
 pub mod stdlib;
+pub mod methods;
 pub mod vm;
 pub mod lexer;
 pub mod parser;

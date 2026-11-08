@@ -26,6 +26,8 @@ pub enum Token {
     Bang,
     AmpAmp,
     PipePipe,
+    Pipe,
+    FatArrow,
     // compound assignment
     PlusEq,
     MinusEq,
@@ -239,6 +241,7 @@ pub fn tokenize(src: &str) -> (Vec<Spanned<Token>>, Vec<Diag>) {
             _ => match two {
             ".." => (Some(Token::DotDot), 2),
             "->" => (Some(Token::Arrow), 2),
+            "=>" => (Some(Token::FatArrow), 2),
             "==" => (Some(Token::Eq), 2),
             "!=" => (Some(Token::NotEq), 2),
             ">=" => (Some(Token::GtEq), 2),
@@ -256,6 +259,7 @@ pub fn tokenize(src: &str) -> (Vec<Spanned<Token>>, Vec<Diag>) {
                 b'*' => (Some(Token::Asterisk), 1),
                 b'/' => (Some(Token::Slash), 1),
                 b'%' => (Some(Token::Percent), 1),
+                b'|' => (Some(Token::Pipe), 1),
                 b'!' => (Some(Token::Bang), 1),
                 b'(' => (Some(Token::LParen), 1),
                 b')' => (Some(Token::RParen), 1),

@@ -74,3 +74,41 @@ bare name `self` resolves to the handle set with `Engine::set_self_handle(Some(i
 handle `self.x` / `self.f()` read the script's own variables and functions first (no host call),
 and fall back to the hooks otherwise. Lower-level hosts implement the `RuspyHost` methods
 `object_get/object_set/object_call/is_self/resolve_name`.
+
+## 5. vectors and colors
+
+`vec2(x, y)`, `vec3(x, y, z)`, `Color(r, g, b [, a])` (also `Vec2/Vec3/color`, and from one array:
+`vec3([1, 2, 3])`). Value types: assigning copies. `+ - * /` work componentwise between two
+vectors of the same type, and `*` `/` take a number (`2 * v`, `v / 2`); `-v`; `==`.
+Components: `.x .y .z` (Color: `.r .g .b .a`), `v[0]`; write with `v.x = 1`, `v.x += 1`,
+`v[1] = 2` when `v` is a variable (not through an expression like `f().x = 1`).
+Methods: `length() length_squared() normalized() dot(v) cross(v) distance_to(v) lerp(v, t) abs()
+to_array()`. Prints `(1, 2, 3)`.
+
+## 6. strings
+
+`len split([sep]) join(array) strip/trim upper lower replace(a, b) find(s) (-1 if missing)
+contains/has begins_with ends_with substr(from[, len]) slice(from, to) to_int to_float`,
+`s[i]` (one-char str), `fmt("{} + {}", a, b)` (`{{`/`}}` escape) and `"%s %d %.2f %%" % [a, b, c]`.
+`",".join(arr)` and `arr.join(",")` both work.
+
+## 7. more arrays
+
+`append push pop insert(i, v) remove(i)/remove_at sort reverse has find/index_of slice(a[, b])
+join(sep) contains first last clear sum min max len`.
+
+## 8. const, enum, match
+
+```
+const SPEED = 5;                 # assigning to it later is an error
+enum State { IDLE, RUN, JUMP = 10, FALL }   # State.IDLE == 0 ... State.FALL == 11 (a read-only dict)
+match s {
+    State.IDLE => { ... }
+    State.RUN | State.JUMP => { ... }   # alternatives with |
+    "a" => { ... },                     # commas between arms are optional
+    _ => { ... }                        # wildcard
+}
+```
+`match`, `const` and `enum` are contextual: still fine as variable names. `match` is a statement
+(no value). Arms compare with `==`. The VM does not compile `match`, dicts (so enums), strings
+methods or vectors' methods/assignments; the host falls back to the interpreter on `E0900`.

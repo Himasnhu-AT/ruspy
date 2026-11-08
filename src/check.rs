@@ -170,6 +170,15 @@ impl Checker {
                     self.check_scope(e);
                 }
             }
+            StmtKind::Match { scrut, arms } => {
+                self.synth(scrut);
+                for arm in arms {
+                    for p in &arm.pats {
+                        self.synth(p);
+                    }
+                    self.check_scope(&arm.body);
+                }
+            }
             StmtKind::While { cond, body } => {
                 self.expect_bool(cond);
                 self.in_loop += 1;

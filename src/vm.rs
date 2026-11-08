@@ -229,6 +229,7 @@ impl Compiler {
             }
             // Break/Continue would need loop-scoped patch lists; deferred with arrays.
             StmtKind::Break | StmtKind::Continue => Err(Unsupported("break/continue".into())),
+            StmtKind::Match { .. } => Err(Unsupported("match".into())),
             StmtKind::IndexAssign { .. } => Err(Unsupported("array index assignment".into())),
             StmtKind::FieldAssign { .. } => Err(Unsupported("struct field assignment".into())),
             StmtKind::Struct { .. } => Err(Unsupported("struct declaration".into())),
@@ -490,6 +491,8 @@ impl<'a> Vm<'a> {
                             (true, Some(g)) => g.clone(),
                             _ => host.object_get(id, field).map_err(|m| Diag::error(sp, "E0331", m))?,
                         },
+                        Some(v @ (Value::Vec2(_) | Value::Vec3(_) | Value::Color(_))) => crate::methods::vec_get(&v, field)
+                            .ok_or_else(|| Diag::error(sp, "E0322", format!("`{}` has no component `{field}`", v.type_name())))?,
                         Some(Value::Dict(d)) => d
                             .borrow()
                             .get_str(field)

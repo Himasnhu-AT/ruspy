@@ -103,10 +103,20 @@ pub enum StmtKind {
     While { cond: Expr, body: Vec<Stmt> },
     /// `for var in iter { body }` — `iter` is a range (`a..b`) or an array (M8).
     For { var: String, iter: Expr, body: Vec<Stmt> },
+    /// `match x { 1 | 2 => { .. }, "a" => { .. }, _ => { .. } }`
+    Match { scrut: Expr, arms: Vec<MatchArm> },
     /// `break;`
     Break,
     /// `continue;`
     Continue,
+}
+
+/// One `match` arm. `pats` empty means the wildcard `_`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub pats: Vec<Expr>,
+    pub wild: bool,
+    pub body: Vec<Stmt>,
 }
 
 /// A function parameter with an optional type annotation.

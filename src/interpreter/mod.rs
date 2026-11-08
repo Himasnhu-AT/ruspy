@@ -241,6 +241,19 @@ impl Interpreter {
                 let a = self.eval(array, host)?;
                 let i = self.eval(index, host)?;
                 let rhs = self.eval(value, host)?;
+                if crate::value::vec_parts(&a).is_some() {
+                    let (Value::Int(n), ExprKind::Ident(var)) = (&i, &array.node) else {
+                        return Err(Diag::error(array.span, "E0313", "vector components can be set on a variable: `v[0] = x`"));
+                    };
+                    let rhs = match op {
+                        Some(o) => value::binop(*o, &crate::methods::vec_index(&a, *n).unwrap_or(Value::Null), &rhs, stmt.span)?,
+                        None => rhs,
+                    };
+                    let x = rhs.as_f64().ok_or_else(|| Diag::error(value.span, "E0351", "vector components are numbers"))?;
+                    let nv = crate::methods::vec_with_index(&a, *n, x).ok_or_else(|| Diag::error(stmt.span, "E0315", format!("index {n} out of bounds for {}", a.type_name())))?;
+                    self.assign_existing(var, nv);
+                    return Ok(Flow::Normal);
+                }
                 if let Value::Dict(d) = &a {
                     let key = dict_key(&i, index.span)?;
                     let new = match op {
@@ -271,6 +284,20 @@ impl Interpreter {
             StmtKind::FieldAssign { object, field, op, value } => {
                 let obj = self.eval(object, host)?;
                 let rhs = self.eval(value, host)?;
+                if crate::value::vec_parts(&obj).is_some() {
+                    let ExprKind::Ident(var) = &object.node else {
+                        return Err(Diag::error(object.span, "E0320", format!("set `{field}` on a variable holding the vector (`v.{field} = x`), not on an expression")));
+                    };
+                    let cur = crate::methods::vec_get(&obj, field).ok_or_else(|| Diag::error(stmt.span, "E0322", format!("`{}` has no component `{field}`", obj.type_name())))?;
+                    let rhs = match op {
+                        Some(o) => value::binop(*o, &cur, &rhs, stmt.span)?,
+                        None => rhs,
+                    };
+                    let x = rhs.as_f64().ok_or_else(|| Diag::error(value.span, "E0351", "vector components are numbers"))?;
+                    let nv = crate::methods::vec_set(&obj, field, x).unwrap_or(obj);
+                    self.assign_existing(var, nv);
+                    return Ok(Flow::Normal);
+                }
                 if let Value::Object(id) = &obj {
                     let new = match op {
                         Some(o) => {
@@ -336,6 +363,23 @@ impl Interpreter {
                     None => Value::Void,
                 };
                 Ok(Flow::Return(v))
+            }
+            StmtKind::Match { scrut, arms } => {
+                let v = self.eval(scrut, host)?;
+                for arm in arms {
+                    let mut hit = arm.wild;
+                    for p in &arm.pats {
+                        if hit {
+                            break;
+                        }
+                        let pv = self.eval(p, host)?;
+                        hit = value::values_equal(&v, &pv);
+                    }
+                    if hit {
+                        return self.exec_block(&arm.body, host);
+                    }
+                }
+                Ok(Flow::Normal)
             }
             StmtKind::Break => Ok(Flow::Break),
             StmtKind::Continue => Ok(Flow::Continue),
@@ -471,6 +515,8 @@ impl Interpreter {
                         .cloned()
                         .ok_or_else(|| Diag::error(span, "E0321", format!("struct `{sname}` has no field `{field}`"))),
                     Value::Object(id) => self.obj_get(id, field, span, host),
+                    v @ (Value::Vec2(_) | Value::Vec3(_) | Value::Color(_)) => crate::methods::vec_get(&v, field)
+                        .ok_or_else(|| Diag::error(span, "E0322", format!("`{}` has no component `{field}`", v.type_name()))),
                     Value::Dict(d) => d
                         .borrow()
                         .get_str(field)
@@ -519,6 +565,16 @@ impl Interpreter {
             ExprKind::Index(arr, idx) => {
                 let a = self.eval(arr, host)?;
                 let i = self.eval(idx, host)?;
+                if let (Value::Int(n), true) = (&i, crate::value::vec_parts(&a).is_some()) {
+                    return crate::methods::vec_index(&a, *n).ok_or_else(|| Diag::error(span, "E0315", format!("index {n} out of bounds for {}", a.type_name())));
+                }
+                if let (Value::Str(s), Value::Int(n)) = (&a, &i) {
+                    return usize::try_from(*n)
+                        .ok()
+                        .and_then(|n| s.chars().nth(n))
+                        .map(|c| Value::Str(c.to_string()))
+                        .ok_or_else(|| Diag::error(span, "E0315", format!("index {n} out of bounds for str of length {}", s.chars().count())));
+                }
                 if let Value::Dict(d) = &a {
                     let key = dict_key(&i, idx.span)?;
                     let got = d.borrow().get(&key).cloned();
@@ -554,6 +610,8 @@ impl Interpreter {
                 match &r {
                     Value::Object(id) => self.obj_call(*id, name, argv, span, host),
                     Value::Dict(d) => dict_method(d, name, argv, span),
+                    Value::Vec2(_) | Value::Vec3(_) | Value::Color(_) => crate::methods::vec_method(&r, name, &argv, span),
+                    Value::Str(s) => crate::methods::str_method(s, name, &argv, span),
                     _ => array_method(&r, name, argv, span),
                 }
             }
@@ -767,6 +825,85 @@ fn array_method(recv: &Value, name: &str, args: Vec<Value>, span: Span) -> Resul
             arity(0)?;
             a.borrow_mut().clear();
             Ok(Value::Void)
+        }
+        "append" => {
+            arity(1)?;
+            a.borrow_mut().push(args.into_iter().next().unwrap());
+            Ok(Value::Void)
+        }
+        "insert" => {
+            arity(2)?;
+            let Value::Int(i) = args[0] else { return Err(Diag::error(span, "E0314", "`insert` index must be an int")) };
+            let len = a.borrow().len();
+            if i < 0 || i as usize > len {
+                return Err(Diag::error(span, "E0315", format!("index {i} out of bounds for array of length {len}")));
+            }
+            a.borrow_mut().insert(i as usize, args[1].clone());
+            Ok(Value::Void)
+        }
+        "remove" | "remove_at" => {
+            arity(1)?;
+            let Value::Int(i) = args[0] else { return Err(Diag::error(span, "E0314", "`remove` index must be an int")) };
+            let len = a.borrow().len();
+            if i < 0 || i as usize >= len {
+                return Err(Diag::error(span, "E0315", format!("index {i} out of bounds for array of length {len}")));
+            }
+            Ok(a.borrow_mut().remove(i as usize))
+        }
+        "reverse" => {
+            arity(0)?;
+            a.borrow_mut().reverse();
+            Ok(Value::Void)
+        }
+        "sort" => {
+            arity(0)?;
+            let mut items = a.borrow().clone();
+            let mut failure = None;
+            items.sort_by(|x, y| match value::binop(value::BinOp::Lt, x, y, span) {
+                Ok(Value::Bool(true)) => std::cmp::Ordering::Less,
+                Ok(_) => match value::binop(value::BinOp::Gt, x, y, span) {
+                    Ok(Value::Bool(true)) => std::cmp::Ordering::Greater,
+                    _ => std::cmp::Ordering::Equal,
+                },
+                Err(e) => {
+                    failure = Some(e);
+                    std::cmp::Ordering::Equal
+                }
+            });
+            if let Some(e) = failure {
+                return Err(e);
+            }
+            *a.borrow_mut() = items;
+            Ok(Value::Void)
+        }
+        "find" | "index_of" => {
+            arity(1)?;
+            let pos = a.borrow().iter().position(|v| value::values_equal(v, &args[0]));
+            Ok(Value::Int(pos.map_or(-1, |p| p as i64)))
+        }
+        "slice" => {
+            if args.is_empty() || args.len() > 2 {
+                return Err(Diag::error(span, "E0317", "`slice` takes 1 or 2 arguments"));
+            }
+            let len = a.borrow().len() as i64;
+            let Value::Int(from) = args[0] else { return Err(Diag::error(span, "E0314", "`slice` bounds must be ints")) };
+            let to = match args.get(1) {
+                None => len,
+                Some(Value::Int(t)) => *t,
+                Some(_) => return Err(Diag::error(span, "E0314", "`slice` bounds must be ints")),
+            };
+            let from = from.clamp(0, len);
+            let to = to.clamp(from, len);
+            Ok(Value::array(a.borrow()[from as usize..to as usize].to_vec()))
+        }
+        "join" => {
+            arity(1)?;
+            let Value::Str(sep) = &args[0] else { return Err(Diag::error(span, "E0353", "`join` expects a str separator")) };
+            Ok(Value::Str(a.borrow().iter().map(|v| v.to_string()).collect::<Vec<_>>().join(sep)))
+        }
+        "has" => {
+            arity(1)?;
+            Ok(Value::Bool(a.borrow().iter().any(|v| value::values_equal(v, &args[0]))))
         }
         "contains" => {
             arity(1)?;
@@ -998,6 +1135,69 @@ mod tests {
         assert_eq!(err(r#"d = {1.5: 1};"#)[0].code, "E0340");
         assert_eq!(err(r#"d = {}; d.frob();"#)[0].code, "E0343");
         assert_eq!(err(r#"d = {"a": 1}; d["q"] += 1;"#)[0].code, "E0342");
+    }
+
+    #[test]
+    fn vectors_arithmetic_members_and_methods() {
+        assert_eq!(out("v = vec3(1, 2, 3); w = v + vec3(1, 1, 1); print w; print w * 2; print 2 * w; print w / 2; print -v; print v - v;"),
+            vec!["(2, 3, 4)", "(4, 6, 8)", "(4, 6, 8)", "(1, 1.5, 2)", "(-1, -2, -3)", "(0, 0, 0)"]);
+        assert_eq!(out("v = vec3(1, 2, 3); print v.x; print v.z; v.y = 9; v.x += 1; print v; v[2] = 0; print v; print v[1];"),
+            vec!["1", "3", "(2, 9, 3)", "(2, 9, 0)", "9"]);
+        assert_eq!(out("print vec2(3, 4).length(); print vec2(3, 4).normalized(); print vec3(1,0,0).dot(vec3(0,1,0)); print vec3(1,0,0).cross(vec3(0,1,0));"),
+            vec!["5", "(0.6, 0.8)", "0", "(0, 0, 1)"]);
+        assert_eq!(out("print vec2(0, 0).distance_to(vec2(3, 4)); print vec2(0, 0).lerp(vec2(10, 20), 0.5); print vec3(1,2,3) == vec3(1,2,3); print vec3(1,2,3) == vec3(1,2,4);"),
+            vec!["5", "(5, 10)", "true", "false"]);
+        assert_eq!(out("c = Color(1, 0.5, 0); print c.r; print c.a; c.a = 0.25; print c; print vec3([1, 2, 3]);"),
+            vec!["1", "1", "Color(1, 0.5, 0, 0.25)", "(1, 2, 3)"]);
+        assert_eq!(err("print vec3(1,2,3) + vec2(1,2);")[0].code, "E0204");
+        assert_eq!(err("v = vec2(1,2); print v.z;")[0].code, "E0322");
+        assert_eq!(err("print vec3(1, 2);")[0].code, "E0355");
+    }
+
+    #[test]
+    fn string_methods_format_and_indexing() {
+        assert_eq!(out(r#"s = "  Hello, World "; print s.strip(); print s.strip().upper(); print s.lower().len(); print "a,b,c".split(",");"#),
+            vec!["Hello, World", "HELLO, WORLD", "15", "[a, b, c]"]);
+        assert_eq!(out(r#"print ",".join(["x", "y", 3]); print "hello".replace("l", "L"); print "hello".find("lo"); print "hello".find("z");"#),
+            vec!["x,y,3", "heLLo", "3", "-1"]);
+        assert_eq!(out(r#"print "hello".begins_with("he"); print "hello".ends_with("he"); print "hello".substr(1, 3); print "hello".substr(2); print "hello"[1]; print "42".to_int() + 1; print "2.5".to_float() * 2;"#),
+            vec!["true", "false", "ell", "llo", "e", "43", "5"]);
+        assert_eq!(out(r#"print fmt("{} + {} = {}", 1, 2.5, "x"); print fmt("{{}} {}", 7); print "%s has %d hp (%.1f%%)" % ["orc", 12, 99.55]; print "n=%d" % 3;"#),
+            vec!["1 + 2.5 = x", "{} 7", "orc has 12 hp (99.5%)", "n=3"]);
+        assert_eq!(err(r#"print "a".frob();"#)[0].code, "E0354");
+    }
+
+    #[test]
+    fn array_methods_sort_insert_slice() {
+        assert_eq!(out("a = [3, 1, 2]; a.sort(); print a; a.reverse(); print a; a.insert(1, 9); print a; print a.remove(0); print a;"),
+            vec!["[1, 2, 3]", "[3, 2, 1]", "[3, 9, 2, 1]", "3", "[9, 2, 1]"]);
+        assert_eq!(out(r#"a = ["b", "a"]; a.sort(); a.append("c"); print a; print a.has("a"); print a.find("c"); print a.find("q"); print a.slice(1); print a.slice(0, 2); print a.join("-");"#),
+            vec!["[a, b, c]", "true", "2", "-1", "[b, c]", "[a, b]", "a-b-c"]);
+        assert_eq!(err("a = [1]; a.insert(5, 1);")[0].code, "E0315");
+    }
+
+    #[test]
+    fn const_enum_and_match() {
+        assert_eq!(out("const MAX = 3; print MAX * 2;"), vec!["6"]);
+        assert_eq!(err("const MAX = 3; MAX = 4;")[0].code, "E0113");
+        let src = r#"
+            enum State { IDLE, RUN, JUMP = 10, FALL }
+            print State.IDLE; print State.RUN; print State.JUMP; print State.FALL;
+            fn name(s) {
+                match s {
+                    State.IDLE => { return "idle"; }
+                    State.RUN | State.JUMP => { return "moving"; }
+                    _ => { return "other"; }
+                }
+            }
+            print name(0); print name(10); print name(11);
+            fn kind(x) { match x { 1 => { return "one"; } "a" | "b" => { return "ab"; } } return "none"; }
+            print kind(1); print kind("b"); print kind(2.5);
+            n = 0; match 2 { 1 => { n = 1; }, 2 => { n = 2; }, _ => { n = 3; }, } print n;"#;
+        assert_eq!(out(src), vec!["0", "1", "10", "11", "idle", "moving", "other", "one", "ab", "none", "2"]);
+        assert_eq!(err("enum E { A } E = 1;")[0].code, "E0113");
+        // `match`, `const`, `enum` stay usable as names where they are not statements.
+        assert_eq!(out("match = 3; print match + 1;"), vec!["4"]);
     }
 
     #[test]
